@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "power-meter-audit"
+version = "0.2.0"
+description = "Find inconsistent power readings across cycling FIT activities"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fitparse>=1.2.0",
+  "numpy>=1.26.0",
+]
+
+[project.scripts]
+power-meter-audit = "power_meter_audit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["power_meter_audit*"]
+
