@@ -135,9 +135,28 @@ against a system Python such as `C:\Python310` that needs admin rights and fails
 A venv you own has no such problem.
 
 The trainer is driven over Bluetooth FTMS. The pedals are read over ANT+ by default, which supports
-unlimited concurrent listeners so your head unit can keep recording the same ride; that needs an
-ANT+ USB stick and libusb drivers. `--pedals-ble` is available as a fallback but consumes one of the
-pedals' few BLE connection slots. Close Zwift first — BLE trainer control is exclusive.
+unlimited concurrent listeners so your head unit can keep recording the same ride. `--pedals-ble` is
+available as a fallback but consumes one of the pedals' few BLE connection slots. Close Zwift first
+— BLE trainer control is exclusive.
+
+### ANT+ on Windows
+
+`openant` reaches the USB stick through pyusb, which needs two things Windows does not provide by
+default. Both failures are silent about their cause, so they are translated into instructions in the
+app itself.
+
+1. **libusb.** Absent, pyusb fails with `No backend available`. The `[hardware]` extra pulls
+   `libusb-package` on Windows to supply it, and the DLL is registered with pyusb at startup —
+   bundled inside site-packages, it is somewhere pyusb would never look on its own.
+2. **A libusb-compatible driver bound to the stick.** Garmin's own ANT USB driver will not let
+   libusb claim the device, so pyusb finds no stick and `openant` raises `DriverNotFound`. Use
+   [Zadig](https://zadig.akeo.ie) to replace the driver with **WinUSB**: *Options → List All
+   Devices*, select the ANT USB stick, choose WinUSB, *Replace Driver*. Garmin Express and any ANT
+   Agent must not be running, as they hold the stick open.
+
+Prefer BLE for the pedals if you would rather not rebind the driver: pick "Pedals over BLE instead"
+in the UI, or pass `--pedals-ble <address>`. Cadence is derived from the crank counters in that mode
+because the BLE power profile carries no cadence field.
 
 # Tests
 

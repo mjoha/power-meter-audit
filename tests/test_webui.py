@@ -14,6 +14,7 @@ aiohttp = pytest.importorskip("aiohttp")
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
 from power_meter_audit.live.protocol import quick_protocol, standard_protocol  # noqa: E402
+from power_meter_audit.live.simulator import SimulatedPedals  # noqa: E402
 from power_meter_audit.live.webui.server import (  # noqa: E402
     STATIC_DIR,
     CompareServer,
@@ -121,6 +122,43 @@ def test_hardware_mode_without_an_address_is_rejected():
             response = await test_client.post("/api/connect", json={"mode": "hardware"})
             assert response.status == 400
             assert "trainer address" in (await response.json())["error"]
+
+    asyncio.run(scenario())
+
+
+def test_one_radio_failing_leaves_the_other_usable_and_named():
+    """Reproduces a real hardware session: the trainer connected over BLE and
+    streamed data, but the ANT+ pedals failed for want of libusb. The rig must
+    not claim to be disconnected while a source is live, and it must say which
+    source failed rather than showing a bare error.
+    """
+
+    async def scenario():
+        async with client() as (test_client, server):
+
+            async def failing_connect(self):
+                raise RuntimeError("ANT+ needs libusb, which Windows does not ship")
+
+            original = SimulatedPedals.connect
+            SimulatedPedals.connect = failing_connect
+            try:
+                await test_client.post("/api/connect", json={"mode": "simulate", "speed": 20})
+            finally:
+                SimulatedPedals.connect = original
+
+            await asyncio.sleep(0.4)
+            state = await (await test_client.get("/api/state")).json()
+
+            assert state["phase"] == "partial"
+            assert state["sources"]["trainer"]["alive"]  # trainer really is working
+            assert state["sources"]["trainer"]["error"] is None
+            assert "libusb" in state["sources"]["pedals"]["error"]
+            assert "libusb" in state["error"]
+
+            # Comparing needs both, and the refusal has to say so.
+            response = await test_client.post("/api/start")
+            assert response.status == 400
+            assert "both sources" in (await response.json())["error"]
 
     asyncio.run(scenario())
 

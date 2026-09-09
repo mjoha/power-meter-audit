@@ -20,6 +20,69 @@ FTMS_SERVICE_UUID = "00001826-0000-1000-8000-00805f9b34fb"
 CYCLING_POWER_SERVICE_UUID = "00001818-0000-1000-8000-00805f9b34fb"
 
 
+def ensure_usb_backend() -> str:
+    """Give pyusb a libusb backend if the platform does not supply one.
+
+    openant calls ``usb.core.find()`` with no backend, so pyusb has to locate
+    libusb by itself. Windows ships none, which surfaces as a bare "No backend
+    available". ``libusb_package`` bundles the DLL but keeps it inside
+    site-packages, where pyusb's library search will not look, so the backend is
+    primed here from that path. pyusb caches it, and openant's later plain
+    ``find()`` calls then succeed unmodified.
+    """
+    try:
+        import usb.backend.libusb1
+    except ImportError:
+        return "pyusb-missing"
+
+    if usb.backend.libusb1.get_backend() is not None:
+        return "system"
+
+    try:
+        import libusb_package
+    except ImportError:
+        return "unavailable"
+
+    path = libusb_package.get_library_path()
+    if path is None:
+        return "unavailable"
+    backend = usb.backend.libusb1.get_backend(find_library=lambda _: str(path))
+    return "bundled" if backend is not None else "unavailable"
+
+
+def ant_error_hint(exc: BaseException) -> str:
+    """Turn openant's opaque USB failures into something actionable.
+
+    Two failures dominate on Windows and neither explains itself: pyusb raises
+    "No backend available" when libusb is absent, and openant raises
+    ``DriverNotFound`` with an empty message when libusb works but no stick is
+    claimable.
+    """
+    name = type(exc).__name__
+    text = str(exc).strip()
+
+    if name == "NoBackendError" or "no backend available" in text.lower():
+        return (
+            "ANT+ needs libusb, which Windows does not ship. Install it with "
+            "'pip install libusb-package', then bind the ANT+ stick to the WinUSB "
+            "driver using Zadig (https://zadig.akeo.ie). Until then, use BLE for "
+            "the pedals instead."
+        )
+    if name == "DriverNotFound":
+        return (
+            "libusb is working but no ANT+ stick could be claimed. Check it is "
+            "plugged in, that Zadig has bound it to WinUSB rather than Garmin's "
+            "own driver, and that Garmin Express or an ANT Agent is not holding it."
+        )
+    if name == "USBError" and ("access" in text.lower() or "permission" in text.lower()):
+        return (
+            "The ANT+ stick was found but could not be opened. Another program is "
+            "probably holding it, or it is still bound to Garmin's driver rather "
+            "than WinUSB."
+        )
+    return f"ANT+ setup failed: {text or name}"
+
+
 class CrankCadenceTracker:
     """Derives cadence from Cycling Power Service crank revolution counters.
 
@@ -170,7 +233,11 @@ class AntPlusPedals(PowerSource):
         from openant.easy.node import Node
 
         self._loop = asyncio.get_running_loop()
-        self._node = Node()
+        ensure_usb_backend()
+        try:
+            self._node = Node()
+        except Exception as exc:  # noqa: BLE001 - re-raised with a usable message
+            raise RuntimeError(ant_error_hint(exc)) from exc
         self._node.set_network_key(0x00, ANTPLUS_NETWORK_KEY)
         self._device = PowerMeter(self._node, device_id=self.device_id)
         self._device.on_device_data = self._on_device_data

@@ -259,23 +259,33 @@ function render() {
 
 function renderPhase() {
   const pill = $("phase-pill");
+  const offline = Object.values(state.sources)
+    .filter((source) => source.error)
+    .map((source) => source.label.toLowerCase());
   const labels = {
     idle: "disconnected",
+    partial: `${offline.join(" & ")} offline`,
     connected: "connected",
     running: "running",
     finished: "finished",
   };
   pill.textContent = labels[state.phase] || state.phase;
-  pill.className = "pill" + (state.phase === "running" ? " busy" : state.phase === "idle" ? "" : " live");
+  pill.className =
+    "pill" +
+    (state.phase === "running" || state.phase === "partial"
+      ? " busy"
+      : state.phase === "idle"
+      ? ""
+      : " live");
 
   const speed = $("speed-pill");
   const accelerated = state.mode === "simulate" && state.speed > 1 && state.phase !== "idle";
   speed.classList.toggle("hidden", !accelerated);
   speed.textContent = `time ×${Math.round(state.speed)}`;
 
-  const connected = state.phase !== "idle";
-  $("btn-connect").disabled = connected;
-  $("btn-disconnect").disabled = !connected;
+  // Connect stays available while partly connected so a fixed radio can be retried.
+  $("btn-connect").disabled = state.phase === "connected" || state.phase === "running";
+  $("btn-disconnect").disabled = state.phase === "idle";
   $("btn-start").disabled = !(state.phase === "connected" || state.phase === "finished");
   $("btn-stop").disabled = state.phase !== "running";
 }
@@ -290,6 +300,17 @@ function renderSources() {
     card.querySelector(".cadence").textContent =
       source.cadence == null ? "—" : Math.round(source.cadence);
     card.querySelector(".rate").textContent = source.hz ? `${source.hz.toFixed(1)} Hz` : "no data";
+    card.classList.toggle("failed", !!source.error);
+    let note = card.querySelector(".source-error");
+    if (source.error && !note) {
+      note = document.createElement("div");
+      note.className = "source-error";
+      card.appendChild(note);
+    }
+    if (note) {
+      note.textContent = source.error || "";
+      note.classList.toggle("hidden", !source.error);
+    }
   });
 }
 

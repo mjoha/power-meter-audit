@@ -186,7 +186,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.simulate:
         log = asyncio.run(_run_simulated(args, protocol))
     else:
-        log = asyncio.run(_run_live(args, protocol))
+        try:
+            log = asyncio.run(_run_live(args, protocol))
+        except RuntimeError as exc:
+            raise SystemExit(f"error: {exc}")
     print()
 
     report = analyse_session(log, Thresholds())

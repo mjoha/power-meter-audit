@@ -47,6 +47,7 @@ class SourceMonitor:
 
     label: str = ""
     last: Sample | None = None
+    error: str | None = None
     arrivals: deque = field(default_factory=lambda: deque(maxlen=200))
 
     def record(self, sample: Sample) -> None:
@@ -72,6 +73,7 @@ class SourceMonitor:
             "cadence": self.last.cadence if self.last else None,
             "hz": round(self.hz, 2),
             "alive": self.alive,
+            "error": self.error,
         }
 
 
@@ -198,14 +200,29 @@ class CompareServer:
             monitor.last = None
             monitor.arrivals.clear()
             monitor.label = source.label
+            monitor.error = None
             source.add_handler(monitor.record)
 
-        await self._trainer.connect()
-        await self._pedals.connect()
+        # Connect the sources independently. One radio failing says nothing
+        # about the other, and a half-connected rig that reports itself as
+        # disconnected is worse than one that names the source that failed.
+        for name, source in ((TRAINER, self._trainer), (PEDALS, self._pedals)):
+            try:
+                await source.connect()
+            except Exception as exc:  # noqa: BLE001 - reported per source
+                self.monitors[name].error = str(exc) or type(exc).__name__
+
         if self._driver is not None:
             await self._driver.start()
 
-        self.phase = "connected"
+        live = [name for name in (TRAINER, PEDALS) if self.monitors[name].error is None]
+        self.phase = "connected" if len(live) == 2 else "partial" if live else "idle"
+        failures = [
+            f"{self.monitors[name].label}: {self.monitors[name].error}"
+            for name in (TRAINER, PEDALS)
+            if self.monitors[name].error
+        ]
+        self.error = "  ".join(failures) or None
         await self._ensure_push_task()
 
     async def disconnect(self) -> None:
@@ -220,12 +237,17 @@ class CompareServer:
                 except Exception as exc:  # noqa: BLE001 - teardown is best effort
                     self.warnings.append(f"disconnect failed: {exc}")
         self._trainer = self._pedals = None
-        if self.phase in {"connected", "running"}:
+        if self.phase in {"connected", "partial", "running"}:
             self.phase = "idle"
 
     # ---------- session lifecycle ----------
 
     async def start(self) -> None:
+        if self.phase == "partial":
+            offline = [m.label for m in self.monitors.values() if m.error]
+            raise ValueError(
+                f"comparing needs both sources, and {', '.join(offline)} did not connect"
+            )
         if self.phase not in {"connected", "finished"}:
             raise ValueError("connect the devices first")
         if self._trainer is None or self._pedals is None or self._clock is None:
