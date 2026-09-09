@@ -1,0 +1,93 @@
+"""Wiring helpers that assemble a runnable session from its parts."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Callable
+
+from power_meter_audit.live.protocol import Protocol
+from power_meter_audit.live.runner import EventHandler, SegmentStarted, SessionRunner
+from power_meter_audit.live.session import SessionLog
+from power_meter_audit.live.simulator import SimulatedRig
+from power_meter_audit.live.sources import Clock, PowerSource, TrainerSource, VirtualClock
+
+
+def build_runner(
+    protocol: Protocol,
+    trainer: TrainerSource,
+    pedals: PowerSource,
+    clock: Clock,
+    on_event: EventHandler | None = None,
+    extra_segment_hook: Callable[[int | None], None] | None = None,
+) -> SessionRunner:
+    def handle(event) -> None:
+        if extra_segment_hook is not None and isinstance(event, SegmentStarted):
+            extra_segment_hook(event.segment.target_rpm)
+        if on_event is not None:
+            on_event(event)
+
+    return SessionRunner(protocol, trainer, pedals, clock=clock, on_event=handle)
+
+
+async def run_simulated_session(
+    protocol: Protocol,
+    rig: SimulatedRig | None = None,
+    clock: VirtualClock | None = None,
+    on_event: EventHandler | None = None,
+) -> SessionLog:
+    """Run a whole protocol in simulated time against a synthetic rig."""
+    clock = clock or VirtualClock()
+    rig = rig or SimulatedRig()
+    rig.attach(clock)
+
+    runner = build_runner(
+        protocol,
+        rig.trainer,
+        rig.pedals,
+        clock=clock,
+        on_event=on_event,
+        extra_segment_hook=rig.set_target_cadence,
+    )
+    return await runner.run()
+
+
+class SimulationDriver:
+    """Ticks a simulated rig against a wall-clock (or accelerated) clock.
+
+    The virtual clock drives the rig itself, but under a real clock nothing
+    advances time on its own, so a background task has to.
+    """
+
+    def __init__(
+        self, rig: SimulatedRig, clock: Clock, hz: float = 8.0, min_interval_s: float = 0.005
+    ) -> None:
+        self.rig = rig
+        self.clock = clock
+        self.hz = hz
+        # Accelerated time would otherwise ask for sub-millisecond wakeups and
+        # starve the event loop; the rig backfills whatever a coarser tick skips.
+        self.min_interval_s = min_interval_s
+        self._task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        if self._task is None:
+            self._task = asyncio.create_task(self._loop())
+
+    async def _loop(self) -> None:
+        speed = getattr(self.clock, "speed", 1.0)
+        interval = max(1.0 / self.hz / speed, self.min_interval_s)
+        try:
+            while True:
+                self.rig.tick(self.clock.now())
+                await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            pass
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
