@@ -196,17 +196,16 @@ class CompareServer:
             self._driver = SimulationDriver(rig, self._clock)
             self._rig = rig
         else:
-            from power_meter_audit.live.devices import AntPlusPedals, BlePedals, FtmsTrainer
+            from power_meter_audit.live.devices import BlePedals, FtmsTrainer
 
             address = payload.get("trainer_address")
+            pedals_address = payload.get("pedals_address")
             if not address:
                 raise ValueError("a trainer address is required for a hardware run")
+            if not pedals_address:
+                raise ValueError("a pedals address is required for a hardware run")
             self._trainer = FtmsTrainer(address, self._clock)
-            self._pedals = (
-                BlePedals(payload["pedals_ble"], self._clock)
-                if payload.get("pedals_ble")
-                else AntPlusPedals(self._clock, device_id=int(payload.get("ant_device_id", 0)))
-            )
+            self._pedals = BlePedals(pedals_address, self._clock)
             self._rig = None
             self._driver = None
 

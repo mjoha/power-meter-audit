@@ -1,17 +1,11 @@
-"""Adapters for real hardware: a Wahoo trainer over BLE FTMS, pedals over ANT+.
+"""Adapters for real hardware: a Wahoo trainer and pedals, both over Bluetooth LE.
 
 Imports are deferred so the rest of the package works on a machine with no
 radios and no optional dependencies installed.
-
-NOTE: these adapters have not been run against physical hardware. The protocol
-sequences follow the FTMS spec and the pycycling/openant APIs, but field names
-vary between library versions, so they read values defensively.
 """
 
 from __future__ import annotations
 
-import asyncio
-import threading
 from typing import Any
 
 from power_meter_audit.live.sources import PEDALS, TRAINER, Clock, PowerSource, TrainerSource
@@ -50,69 +44,6 @@ def describe_characteristics(client: Any) -> list[str]:
         name = KNOWN_CHARACTERISTICS.get(uuid)
         described.append(f"{name} ({uuid[4:8]})" if name else uuid)
     return described
-
-
-def ensure_usb_backend() -> str:
-    """Give pyusb a libusb backend if the platform does not supply one.
-
-    openant calls ``usb.core.find()`` with no backend, so pyusb has to locate
-    libusb by itself. Windows ships none, which surfaces as a bare "No backend
-    available". ``libusb_package`` bundles the DLL but keeps it inside
-    site-packages, where pyusb's library search will not look, so the backend is
-    primed here from that path. pyusb caches it, and openant's later plain
-    ``find()`` calls then succeed unmodified.
-    """
-    try:
-        import usb.backend.libusb1
-    except ImportError:
-        return "pyusb-missing"
-
-    if usb.backend.libusb1.get_backend() is not None:
-        return "system"
-
-    try:
-        import libusb_package
-    except ImportError:
-        return "unavailable"
-
-    path = libusb_package.get_library_path()
-    if path is None:
-        return "unavailable"
-    backend = usb.backend.libusb1.get_backend(find_library=lambda _: str(path))
-    return "bundled" if backend is not None else "unavailable"
-
-
-def ant_error_hint(exc: BaseException) -> str:
-    """Turn openant's opaque USB failures into something actionable.
-
-    Two failures dominate on Windows and neither explains itself: pyusb raises
-    "No backend available" when libusb is absent, and openant raises
-    ``DriverNotFound`` with an empty message when libusb works but no stick is
-    claimable.
-    """
-    name = type(exc).__name__
-    text = str(exc).strip()
-
-    if name == "NoBackendError" or "no backend available" in text.lower():
-        return (
-            "ANT+ needs libusb, which Windows does not ship. Install it with "
-            "'pip install libusb-package', then bind the ANT+ stick to the WinUSB "
-            "driver using Zadig (https://zadig.akeo.ie). Until then, use BLE for "
-            "the pedals instead."
-        )
-    if name == "DriverNotFound":
-        return (
-            "libusb is working but no ANT+ stick could be claimed. Check it is "
-            "plugged in, that Zadig has bound it to WinUSB rather than Garmin's "
-            "own driver, and that Garmin Express or an ANT Agent is not holding it."
-        )
-    if name == "USBError" and ("access" in text.lower() or "permission" in text.lower()):
-        return (
-            "The ANT+ stick was found but could not be opened. Another program is "
-            "probably holding it, or it is still bound to Garmin's driver rather "
-            "than WinUSB."
-        )
-    return f"ANT+ setup failed: {text or name}"
 
 
 class CrankCadenceTracker:
@@ -328,91 +259,11 @@ class FtmsTrainer(TrainerSource):
         self.connected = False
 
 
-class AntPlusPedals(PowerSource):
-    """Power meter pedals over ANT+.
-
-    ANT+ is preferred over BLE here because the broadcast supports unlimited
-    listeners, so the head unit can keep recording the same ride while this
-    captures it independently. The Rally only allows a couple of concurrent BLE
-    connections, and Garmin's own dropout advice is to unpair everything else.
-    """
-
-    POWER_FIELDS = ("instantaneous_power", "instant_power", "power")
-    CADENCE_FIELDS = ("cadence", "instantaneous_cadence")
-
-    def __init__(self, clock: Clock, device_id: int = 0, label: str = "Pedals") -> None:
-        super().__init__(PEDALS, label)
-        self._clock = clock
-        self.device_id = device_id
-        self._node = None
-        self._device = None
-        self._thread: threading.Thread | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-
-    async def connect(self) -> None:
-        from openant.devices import ANTPLUS_NETWORK_KEY
-        from openant.devices.power_meter import PowerMeter
-        from openant.easy.node import Node
-
-        if self.connected:
-            return
-
-        self._loop = asyncio.get_running_loop()
-        ensure_usb_backend()
-        try:
-            self._node = Node()
-        except Exception as exc:  # noqa: BLE001 - re-raised with a usable message
-            raise RuntimeError(ant_error_hint(exc)) from exc
-        self._node.set_network_key(0x00, ANTPLUS_NETWORK_KEY)
-        self._device = PowerMeter(self._node, device_id=self.device_id)
-        self._device.on_device_data = self._on_device_data
-
-        # openant is blocking, so the ANT node owns a thread and marshals samples
-        # back onto the event loop.
-        self._thread = threading.Thread(target=self._run_node, daemon=True)
-        self._thread.start()
-        self.connected = True
-
-    def _run_node(self) -> None:
-        try:
-            self._node.start()
-        except Exception:  # noqa: BLE001 - surfaced via absent samples
-            pass
-
-    def _on_device_data(self, page: Any, page_name: Any, data: Any) -> None:
-        watts = _first_attr(data, self.POWER_FIELDS)
-        if watts is None:
-            return
-        cadence = _first_attr(data, self.CADENCE_FIELDS)
-        t = self._clock.now()
-
-        def deliver() -> None:
-            self.emit(t, float(watts), float(cadence) if cadence is not None else None)
-
-        if self._loop is not None and self._loop.is_running():
-            self._loop.call_soon_threadsafe(deliver)
-        else:
-            deliver()
-
-    async def disconnect(self) -> None:
-        if self._device is not None:
-            try:
-                self._device.close_channel()
-            except Exception:  # noqa: BLE001 - best effort on teardown
-                pass
-        if self._node is not None:
-            try:
-                self._node.stop()
-            except Exception:  # noqa: BLE001 - best effort on teardown
-                pass
-        self.connected = False
-
-
 class BlePedals(PowerSource):
-    """Fallback: pedals over the standard BLE Cycling Power Service.
+    """Pedals over the standard BLE Cycling Power Service.
 
-    Uses one of the pedals' scarce BLE connection slots, so prefer ANT+ when a
-    dongle is available.
+    Cadence is derived from the crank revolution counters: the measurement
+    carries no cadence field of its own.
     """
 
     POWER_FIELDS = ("instantaneous_power", "instant_power", "power")

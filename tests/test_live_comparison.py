@@ -10,6 +10,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from power_meter_audit.compare_cli import main as compare_main
 from power_meter_audit.live.analysis import Verdict, analyse_session, format_comparison_report
 from power_meter_audit.live.harness import run_simulated_session
@@ -322,3 +324,10 @@ def test_cli_simulated_run_writes_outputs(tmp_path: Path, capsys):
     assert payload["protocol_name"] == "quick"
     assert len(payload["samples"]) > 100
     assert out.with_suffix(".csv").exists()
+
+
+def test_cli_live_run_requires_both_ble_addresses():
+    with pytest.raises(SystemExit, match="--pedals-address"):
+        compare_main(["--trainer-address", "AA:BB:CC:DD:EE:FF"])
+    with pytest.raises(SystemExit, match="--trainer-address"):
+        compare_main(["--pedals-address", "11:22:33:44:55:66"])

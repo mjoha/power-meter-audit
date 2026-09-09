@@ -116,28 +116,30 @@ def test_connecting_the_simulator_starts_streaming():
     asyncio.run(scenario())
 
 
-def test_hardware_mode_without_an_address_is_rejected():
+def test_hardware_mode_without_addresses_is_rejected():
     async def scenario():
         async with client() as (test_client, _):
             response = await test_client.post("/api/connect", json={"mode": "hardware"})
             assert response.status == 400
             assert "trainer address" in (await response.json())["error"]
 
+            response = await test_client.post(
+                "/api/connect", json={"mode": "hardware", "trainer_address": "AA:BB"}
+            )
+            assert response.status == 400
+            assert "pedals address" in (await response.json())["error"]
+
     asyncio.run(scenario())
 
 
 def test_one_radio_failing_leaves_the_other_usable_and_named():
-    """Reproduces a real hardware session: the trainer connected over BLE and
-    streamed data, but the ANT+ pedals failed for want of libusb. The rig must
-    not claim to be disconnected while a source is live, and it must say which
-    source failed rather than showing a bare error.
-    """
+    """One source failing must not make a live source look disconnected."""
 
     async def scenario():
         async with client() as (test_client, server):
 
             async def failing_connect(self):
-                raise RuntimeError("ANT+ needs libusb, which Windows does not ship")
+                raise RuntimeError("The pedals refused the Bluetooth connection")
 
             original = SimulatedPedals.connect
             SimulatedPedals.connect = failing_connect
@@ -150,18 +152,15 @@ def test_one_radio_failing_leaves_the_other_usable_and_named():
             state = await (await test_client.get("/api/state")).json()
 
             assert state["phase"] == "partial"
-            assert state["sources"]["trainer"]["alive"]  # trainer really is working
+            assert state["sources"]["trainer"]["alive"]
             assert state["sources"]["trainer"]["error"] is None
-            assert "libusb" in state["sources"]["pedals"]["error"]
-            assert "libusb" in state["error"]
+            assert "refused" in state["sources"]["pedals"]["error"]
+            assert "refused" in state["error"]
 
-            # A source that failed must not show numbers beside its failure,
-            # whatever is still arriving from it.
             pedals = state["sources"]["pedals"]
             assert pedals["watts"] is None and pedals["cadence"] is None
             assert pedals["hz"] == 0.0 and pedals["alive"] is False
 
-            # Comparing needs both, and the refusal has to say so.
             response = await test_client.post("/api/start")
             assert response.status == 400
             assert "both sources" in (await response.json())["error"]

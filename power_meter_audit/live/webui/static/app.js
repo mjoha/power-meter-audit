@@ -79,8 +79,7 @@ function connectPayload() {
   return {
     mode,
     trainer_address: $("trainer-address").value.trim(),
-    ant_device_id: Number($("ant-id").value) || 0,
-    pedals_ble: $("pedals-ble").value.trim() || null,
+    pedals_address: $("pedals-address").value.trim(),
   };
 }
 
@@ -114,13 +113,13 @@ $("btn-scan").onclick = async () => {
         `<b>${device.name}</b> ${tags.join(" ")}<span class="sub"> ${device.address}` +
         `${device.rssi == null ? "" : ` · ${device.rssi} dBm`}</span>`;
       item.onclick = () => {
-        $(device.power && !device.trainer ? "pedals-ble" : "trainer-address").value = device.address;
+        $(device.power && !device.trainer ? "pedals-address" : "trainer-address").value = device.address;
       };
       list.appendChild(item);
     });
     $("scan-status").textContent = result.error
       ? result.error
-      : `${(result.devices || []).length} device(s) — click the one marked "trainer"`;
+      : `${(result.devices || []).length} device(s) — click trainer, then the one marked "power"`;
   } catch (error) {
     $("scan-status").textContent = error.message;
   } finally {

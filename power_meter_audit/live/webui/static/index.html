@@ -52,18 +52,16 @@
 
       <div id="panel-hardware" class="panel hidden">
         <p class="hint">
-          The trainer is driven over Bluetooth FTMS. Pedals are read over ANT+ so your head unit can
-          keep recording the same ride. Close Zwift first &mdash; BLE trainer control is exclusive.
+          Both devices talk Bluetooth. Scan, then click the device tagged <i>trainer</i> and the one
+          tagged <i>power</i>. Close Zwift first &mdash; BLE trainer control is exclusive, and the
+          Rally only allows a couple of concurrent pedal connections.
         </p>
         <div class="grid-3">
-          <label>Trainer BLE address
+          <label>Trainer address
             <input id="trainer-address" type="text" placeholder="AA:BB:CC:DD:EE:FF"/>
           </label>
-          <label>ANT+ pedal id <span class="sub">0 = first found</span>
-            <input id="ant-id" type="number" value="0"/>
-          </label>
-          <label>Pedals over BLE instead <span class="sub">optional fallback</span>
-            <input id="pedals-ble" type="text" placeholder="leave blank to use ANT+"/>
+          <label>Pedals address
+            <input id="pedals-address" type="text" placeholder="AA:BB:CC:DD:EE:FF"/>
           </label>
         </div>
         <div class="row">

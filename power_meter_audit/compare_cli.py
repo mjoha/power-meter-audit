@@ -44,8 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument("--scan", action="store_true", help="List nearby BLE power devices and exit")
     p.add_argument("--trainer-address", metavar="ADDR", help="BLE address of the FTMS trainer")
-    p.add_argument("--ant-device-id", type=int, default=0, help="ANT+ id of the pedals (0 = any)")
-    p.add_argument("--pedals-ble", metavar="ADDR", help="Use BLE for the pedals instead of ANT+")
+    p.add_argument("--pedals-address", metavar="ADDR", help="BLE address of the power-meter pedals")
 
     p.add_argument("--out", type=Path, metavar="PREFIX", help="Write <PREFIX>.json and <PREFIX>.csv")
     p.add_argument("--analyse", type=Path, metavar="FILE", help="Re-analyse a saved session and exit")
@@ -120,18 +119,16 @@ def _status_line(status: LiveStatus, tolerance: float) -> str:
 
 
 async def _run_live(args: argparse.Namespace, protocol: Protocol) -> SessionLog:
-    from power_meter_audit.live.devices import AntPlusPedals, BlePedals, FtmsTrainer
+    from power_meter_audit.live.devices import BlePedals, FtmsTrainer
 
     if not args.trainer_address:
         raise SystemExit("error: --trainer-address is required for a live run (try --scan)")
+    if not args.pedals_address:
+        raise SystemExit("error: --pedals-address is required for a live run (try --scan)")
 
     clock = RealClock()
     trainer = FtmsTrainer(args.trainer_address, clock)
-    pedals = (
-        BlePedals(args.pedals_ble, clock)
-        if args.pedals_ble
-        else AntPlusPedals(clock, device_id=args.ant_device_id)
-    )
+    pedals = BlePedals(args.pedals_address, clock)
     runner = build_runner(
         protocol, trainer, pedals, clock=clock, on_event=_make_reporter(protocol.cadence_tolerance_rpm)
     )

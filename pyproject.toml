@@ -16,22 +16,15 @@ dependencies = [
 [project.optional-dependencies]
 # Only needed to talk to real hardware; the simulator and analysis run without them.
 hardware = [
-  # Verified against bleak 3.0.2 / pycycling 0.4.1 / openant 1.3.4. Capped
-  # because bleak makes breaking changes on majors and pycycling tracks it.
+  # Verified against bleak 3.0.2 / pycycling 0.4.1. Capped because bleak
+  # makes breaking changes on majors and pycycling tracks it.
   "bleak>=0.22,<4",
   "pycycling>=0.4.1",
-  "openant>=1.3",
-  # openant reaches the ANT+ stick through pyusb, which needs a libusb that
-  # Windows does not ship; without it every ANT+ call fails with the bare
-  # message "No backend available".
-  "libusb-package>=1.0; sys_platform == 'win32'",
 ]
 ui = ["aiohttp>=3.9"]
 app = [
   "bleak>=0.22,<4",
   "pycycling>=0.4.1",
-  "openant>=1.3",
-  "libusb-package>=1.0; sys_platform == 'win32'",
   "aiohttp>=3.9",
 ]
 

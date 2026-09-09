@@ -2,8 +2,8 @@
 
 The radio paths cannot be exercised without a trainer, but the parts that
 actually interpret device data can be, and those are where the bugs hide.
-`devices` defers every optional import, so this module loads without bleak,
-pycycling or openant present.
+`devices` defers every optional import, so this module loads without bleak or
+pycycling present.
 """
 
 from __future__ import annotations
@@ -18,14 +18,11 @@ from power_meter_audit.live.devices import (
     CPS_MEASUREMENT_UUID,
     FTMS_CONTROL_POINT_UUID,
     FTMS_INDOOR_BIKE_DATA_UUID,
-    AntPlusPedals,
     BlePedals,
     CrankCadenceTracker,
     FtmsTrainer,
     _first_attr,
-    ant_error_hint,
     describe_characteristics,
-    ensure_usb_backend,
 )
 
 TICKS_PER_S = 1024
@@ -112,10 +109,9 @@ class TestCrankCadenceTracker:
 class TestFieldExtraction:
     """The field names each library actually uses, pinned against real payloads.
 
-    Verified against pycycling 0.4.1 and openant 1.3.4: FTMS indoor bike data
-    exposes `instant_power`/`instant_cadence`, the BLE power measurement exposes
-    `instantaneous_power` and no cadence at all, and ANT+ exposes
-    `instantaneous_power`/`cadence`.
+    Verified against pycycling 0.4.1: FTMS indoor bike data exposes
+    `instant_power`/`instant_cadence`, and the BLE power measurement exposes
+    `instantaneous_power` and no cadence at all.
     """
 
     def test_ftms_indoor_bike_data_fields_are_covered(self):
@@ -128,16 +124,6 @@ class TestFieldExtraction:
         data = IndoorBikeData()
         assert _first_attr(data, FtmsTrainer.POWER_FIELDS) == 250
         assert _first_attr(data, FtmsTrainer.CADENCE_FIELDS) == 85.0
-
-    def test_ant_plus_power_data_fields_are_covered(self):
-        class PowerData:
-            instantaneous_power = 245
-            cadence = 88
-            average_power = 240
-
-        data = PowerData()
-        assert _first_attr(data, AntPlusPedals.POWER_FIELDS) == 245
-        assert _first_attr(data, AntPlusPedals.CADENCE_FIELDS) == 88
 
     def test_ble_power_measurement_power_field_is_covered(self):
         class CyclingPowerMeasurement:
@@ -155,91 +141,6 @@ class TestFieldExtraction:
 
         assert _first_attr(Partial(), ("missing", "power", "instant_power")) == 200
         assert _first_attr(Partial(), ("missing",)) is None
-
-
-class TestAntErrorHints:
-    """The two USB failures that dominate on Windows must explain themselves.
-
-    pyusb raises "No backend available" when libusb is absent, and openant
-    raises DriverNotFound with an *empty* message when libusb works but no stick
-    can be claimed. Passed through verbatim, neither tells you what to do.
-    """
-
-    def test_missing_libusb_names_the_fix(self):
-        class NoBackendError(Exception):
-            pass
-
-        hint = ant_error_hint(NoBackendError("No backend available"))
-        assert "libusb-package" in hint
-        assert "Zadig" in hint
-        assert "BLE" in hint  # the workaround available right now
-
-    def test_missing_libusb_is_detected_by_message_too(self):
-        hint = ant_error_hint(ValueError("No backend available"))
-        assert "libusb-package" in hint
-
-    def test_empty_driver_not_found_still_explains_itself(self):
-        class DriverNotFound(Exception):
-            pass
-
-        hint = ant_error_hint(DriverNotFound(""))
-        assert hint.strip()
-        assert "Zadig" in hint
-        assert "plugged in" in hint
-
-    def test_busy_device_points_at_the_holder(self):
-        class USBError(Exception):
-            pass
-
-        hint = ant_error_hint(USBError("[Errno 13] Access denied (insufficient permissions)"))
-        assert "holding it" in hint
-
-    def test_unknown_failure_keeps_the_original_text(self):
-        assert "something odd" in ant_error_hint(RuntimeError("something odd"))
-
-    def test_unknown_failure_without_a_message_still_names_the_type(self):
-        class WeirdError(Exception):
-            pass
-
-        assert "WeirdError" in ant_error_hint(WeirdError(""))
-
-
-class TestUsbBackend:
-    def test_reports_how_the_backend_was_obtained(self):
-        pytest.importorskip("usb.backend.libusb1")
-        assert ensure_usb_backend() in {"system", "bundled", "unavailable"}
-
-    def test_a_working_system_backend_is_left_alone(self, monkeypatch):
-        libusb1 = pytest.importorskip("usb.backend.libusb1")
-        monkeypatch.setattr(libusb1, "get_backend", lambda find_library=None: object())
-        assert ensure_usb_backend() == "system"
-
-    def test_bundled_libusb_is_primed_when_the_system_has_none(self, monkeypatch):
-        """This is the Windows path: prime pyusb so openant's own find() works."""
-        libusb1 = pytest.importorskip("usb.backend.libusb1")
-        sentinel = object()
-        passed = {}
-
-        def fake_get_backend(find_library=None):
-            if find_library is None:
-                return None
-            passed["path"] = find_library("usb-1.0")
-            return sentinel
-
-        monkeypatch.setattr(libusb1, "get_backend", fake_get_backend)
-        monkeypatch.setitem(
-            sys.modules,
-            "libusb_package",
-            types.SimpleNamespace(get_library_path=lambda: "/somewhere/libusb-1.0.dll"),
-        )
-        assert ensure_usb_backend() == "bundled"
-        assert passed["path"] == "/somewhere/libusb-1.0.dll"
-
-    def test_absent_libusb_package_is_reported_not_raised(self, monkeypatch):
-        libusb1 = pytest.importorskip("usb.backend.libusb1")
-        monkeypatch.setattr(libusb1, "get_backend", lambda find_library=None: None)
-        monkeypatch.setitem(sys.modules, "libusb_package", None)
-        assert ensure_usb_backend() == "unavailable"
 
 
 class StubClock:

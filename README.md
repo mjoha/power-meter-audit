@@ -67,7 +67,7 @@ trainer through an ERG ladder while recording a second power meter at the same t
 ```powershell
 power-meter-ui                                    # browser UI (recommended)
 power-meter-compare --scan                        # find BLE devices
-power-meter-compare --trainer-address AA:BB:CC:DD:EE:FF --out runs\test1
+power-meter-compare --trainer-address AA:BB:CC:DD:EE:FF --pedals-address 11:22:33:44:55:66 --out runs\test1
 power-meter-compare --simulate --sim-pedal-torque-gain 0.003   # no hardware needed
 power-meter-compare --analyse runs\test1.json     # re-analyse a saved session
 ```
@@ -134,35 +134,13 @@ against a system Python such as `C:\Python310` that needs admin rights and fails
 `could not create '...\Scripts\fitdump': Permission denied`, taking the whole install down with it.
 A venv you own has no such problem.
 
-The trainer is driven over Bluetooth FTMS. Control (ERG target) always goes over the
-Fitness Machine Control Point; readings come from Indoor Bike Data when the trainer
-serves it, and from the Cycling Power Service otherwise. Wahoo exposes both, and a
-firmware missing Indoor Bike Data used to abort the handshake before control was
-requested, so every target write was ignored and the trainer freewheeled. Close Zwift
-first — BLE trainer control is exclusive.
+Both devices talk Bluetooth. The trainer is driven over FTMS (control always goes over the Fitness
+Machine Control Point; readings come from Indoor Bike Data when the trainer serves it, and from the
+Cycling Power Service otherwise). The pedals are read over the Cycling Power Service; cadence is
+derived from the crank revolution counters because that profile carries no cadence field.
 
-The pedals are read over ANT+ by default, which supports unlimited concurrent listeners
-so your head unit can keep recording the same ride. `--pedals-ble` is available as a
-fallback but consumes one of the pedals' few BLE connection slots.
-
-### ANT+ on Windows
-
-`openant` reaches the USB stick through pyusb, which needs two things Windows does not provide by
-default. Both failures are silent about their cause, so they are translated into instructions in the
-app itself.
-
-1. **libusb.** Absent, pyusb fails with `No backend available`. The `[hardware]` extra pulls
-   `libusb-package` on Windows to supply it, and the DLL is registered with pyusb at startup —
-   bundled inside site-packages, it is somewhere pyusb would never look on its own.
-2. **A libusb-compatible driver bound to the stick.** Garmin's own ANT USB driver will not let
-   libusb claim the device, so pyusb finds no stick and `openant` raises `DriverNotFound`. Use
-   [Zadig](https://zadig.akeo.ie) to replace the driver with **WinUSB**: *Options → List All
-   Devices*, select the ANT USB stick, choose WinUSB, *Replace Driver*. Garmin Express and any ANT
-   Agent must not be running, as they hold the stick open.
-
-Prefer BLE for the pedals if you would rather not rebind the driver: pick "Pedals over BLE instead"
-in the UI, or pass `--pedals-ble <address>`. Cadence is derived from the crank counters in that mode
-because the BLE power profile carries no cadence field.
+Close Zwift first — BLE trainer control is exclusive, and the Rally only allows a couple of concurrent
+pedal connections, so a head unit may not be able to record the same ride.
 
 # Tests
 
