@@ -65,11 +65,26 @@ Heart rate is a noisy bridge between two power meters. `power-meter-compare` rem
 trainer through an ERG ladder while recording a second power meter at the same time, on one clock.
 
 ```powershell
+power-meter-ui                                    # browser UI (recommended)
 power-meter-compare --scan                        # find BLE devices
 power-meter-compare --trainer-address AA:BB:CC:DD:EE:FF --out runs\test1
 power-meter-compare --simulate --sim-pedal-torque-gain 0.003   # no hardware needed
 power-meter-compare --analyse runs\test1.json     # re-analyse a saved session
 ```
+
+## Browser UI
+
+`power-meter-ui` serves a local page with three steps: connect and verify both sources, edit the
+protocol table, then run it. Everything runs in the Python process; the browser is only the view.
+
+The run screen exists mainly for the cadence guide. Samples taken outside the cadence band are
+excluded from a cell rather than averaged in, so you need to see whether you are inside it *now* —
+the page shows the target, the current cadence against a banded meter, a spin-up or slow-down cue,
+and both live power traces so a dead link is obvious before a session is wasted.
+
+Pick "Simulated rig" to rehearse the whole flow without a bike. It can inject a known fault (scale
+error, torque-proportional gain, left-leg fraction) and accelerate time, so a 34-minute protocol
+plays through in well under a minute.
 
 ## The protocol
 
@@ -109,7 +124,7 @@ not attribute it.
 ## Hardware
 
 ```powershell
-pip install -e .[hardware]
+pip install -e .[app]      # or .[hardware] / .[ui] separately
 ```
 
 The trainer is driven over Bluetooth FTMS. The pedals are read over ANT+ by default, which supports
