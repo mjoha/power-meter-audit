@@ -48,6 +48,11 @@ document.querySelectorAll(".tab").forEach((tab) => {
     ["devices", "protocol", "run"].forEach((name) => {
       $(`tab-${name}`).classList.toggle("hidden", name !== tab.dataset.tab);
     });
+    // The canvas has no layout width while the Run tab is hidden, so redraw
+    // once it is visible rather than baking a 0-wide bitmap.
+    if (tab.dataset.tab === "run") {
+      requestAnimationFrame(() => { if (state) drawTrace(); });
+    }
   };
 });
 
@@ -444,19 +449,52 @@ function formatClock(seconds) {
 
 /* ---------------- trace chart ---------------- */
 
+function traceAxisRange(trace) {
+  // Scale to typical watts, not the loudest spike. A spindown or unclip
+  // (0 W, then 280 W) used to set the ceiling so the actual ERG steps sat
+  // off the bottom of the canvas.
+  const watts = [];
+  let targetMax = 0;
+  trace.forEach((point) => {
+    if (point.target_watts != null && Number.isFinite(point.target_watts)) {
+      targetMax = Math.max(targetMax, point.target_watts);
+    }
+    ["trainer", "pedals"].forEach((key) => {
+      const value = point[key];
+      if (value != null && Number.isFinite(value) && value > 0) watts.push(value);
+    });
+  });
+  watts.sort((a, b) => a - b);
+  const percentile = (p) => {
+    if (!watts.length) return 0;
+    const index = Math.min(watts.length - 1, Math.max(0, Math.round((watts.length - 1) * p)));
+    return watts[index];
+  };
+  const ceiling = Math.max(percentile(0.96), targetMax, 50);
+  const max = Math.ceil((ceiling * 1.2) / 25) * 25;
+  return { min: 0, max: Math.max(max, 50) };
+}
+
 function drawTrace() {
   const canvas = $("trace");
-  const trace = state.trace || [];
-  const ratio = window.devicePixelRatio || 1;
-  const width = canvas.clientWidth;
-  const height = canvas.height;
-  if (canvas.width !== width * ratio) {
-    canvas.width = width * ratio;
-    canvas.style.height = `${height}px`;
+  if (!canvas) return;
+  const trace = (state && state.trace) || [];
+  const dpr = window.devicePixelRatio || 1;
+  const cssWidth = canvas.clientWidth;
+  const cssHeight = canvas.clientHeight || 240;
+  // Hidden tab: clientWidth is 0. Leave the last bitmap alone.
+  if (cssWidth < 16) return;
+
+  const pixelWidth = Math.round(cssWidth * dpr);
+  const pixelHeight = Math.round(cssHeight * dpr);
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
   }
+
   const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.clearRect(0, 0, width, height);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
 
   if (trace.length < 2) {
     ctx.fillStyle = "#5c574e";
@@ -466,29 +504,26 @@ function drawTrace() {
   }
 
   const pad = { left: 42, right: 10, top: 12, bottom: 22 };
-  const values = [];
-  trace.forEach((point) => {
-    [point.trainer, point.pedals, point.target_watts].forEach((v) => {
-      if (v != null) values.push(v);
-    });
-  });
-  const maxValue = Math.max(50, Math.ceil(Math.max(...values) / 50) * 50 + 25);
+  const { min, max } = traceAxisRange(trace);
+  const span = Math.max(max - min, 1);
   const t0 = trace[0].t;
   const t1 = Math.max(trace[trace.length - 1].t, t0 + 1);
+  const plotW = cssWidth - pad.left - pad.right;
+  const plotH = cssHeight - pad.top - pad.bottom;
 
-  const x = (t) => pad.left + ((t - t0) / (t1 - t0)) * (width - pad.left - pad.right);
-  const y = (v) => height - pad.bottom - (v / maxValue) * (height - pad.top - pad.bottom);
+  const x = (t) => pad.left + ((t - t0) / (t1 - t0)) * plotW;
+  const y = (v) => pad.top + (1 - (v - min) / span) * plotH;
 
   ctx.strokeStyle = "#e6ded0";
   ctx.fillStyle = "#5c574e";
   ctx.font = '11px "Segoe UI", system-ui, sans-serif';
   ctx.lineWidth = 1;
   for (let step = 0; step <= 4; step++) {
-    const value = (maxValue / 4) * step;
+    const value = min + (span / 4) * step;
     const yy = y(value);
     ctx.beginPath();
     ctx.moveTo(pad.left, yy);
-    ctx.lineTo(width - pad.right, yy);
+    ctx.lineTo(cssWidth - pad.right, yy);
     ctx.stroke();
     ctx.fillText(`${Math.round(value)}`, 6, yy + 3);
   }
@@ -511,9 +546,14 @@ function drawTrace() {
     ctx.setLineDash([]);
   };
 
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(pad.left, pad.top, plotW, plotH);
+  ctx.clip();
   line("target_watts", "#c9c0b0", true);
   line("trainer", "#2f5d8c", false);
   line("pedals", "#9b5d2c", false);
+  ctx.restore();
 }
 
 window.addEventListener("resize", () => { if (state) drawTrace(); });
@@ -536,6 +576,10 @@ function renderResults() {
     report.slope == null
       ? "—"
       : `${report.slope.toFixed(3)}× ${report.intercept >= 0 ? "+" : "−"}${Math.abs(report.intercept).toFixed(0)} W`;
+  fit.querySelectorAll(".sub")[1].textContent =
+    report.r_squared == null
+      ? "pedals against trainer"
+      : `R² ${report.r_squared.toFixed(3)} · pedals ≈ slope × trainer + intercept`;
 
   const body = $("results-body");
   body.innerHTML = "";

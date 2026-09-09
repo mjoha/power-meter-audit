@@ -94,6 +94,30 @@ def test_index_and_initial_state_are_served():
     asyncio.run(scenario())
 
 
+def test_results_page_explains_verdicts_and_table_columns():
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    assert "verdict-help" in html
+    for heading in ("Consistency", "Offset", "Fit"):
+        assert f"<b>{heading}</b>" in html
+    assert "do not change with watts or rpm" in html
+    assert "+2% to +9%" in html
+    assert "slope" in html and "intercept" in html
+    assert "In zone" in html and "Samples" in html
+    assert "Below 70%" in html
+    assert "At least 15" in html
+
+
+def test_chart_script_scales_to_typical_watts_not_the_max_spike():
+    """A spindown spike used to set the y-ceiling and hide the ERG steps."""
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function traceAxisRange" in js
+    assert "percentile(0.96)" in js
+    assert "clientHeight" in js
+    css = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
+    assert "canvas#trace" in css
+    assert "height: 240px" in css
+
+
 def test_connecting_the_simulator_starts_streaming():
     async def scenario():
         async with client() as (test_client, server):

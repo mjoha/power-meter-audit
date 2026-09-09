@@ -195,18 +195,59 @@
           <span class="sub">pedals against trainer</span>
         </div>
       </div>
-      <p class="hint">
-        Consistency is the verdict that needs no assumptions. A left-only pedal read against a
-        direct-drive trainer should sit a few percent high from drivetrain loss and imbalance, and
-        neither of those varies with power or cadence &mdash; so a flat ratio means the two are
-        aligned whatever its value, while a ratio that drifts across the grid points at a real fault.
-      </p>
+      <div class="verdict-help">
+        <p>
+          <b>Consistency</b> asks whether the pedals/trainer ratio stays the same across every
+          power &times; cadence cell. Green means it is flat. A left-only pedal
+          <i>should</i> read a few percent high (drivetrain loss plus left/right imbalance), but
+          those do not change with watts or rpm &mdash; so a ratio that moves across the grid cannot
+          be explained by either, and is the verdict that actually matters.
+        </p>
+        <p>
+          <b>Offset</b> is how high or low the pedals sit versus the trainer, averaged over usable
+          cells. For left-only pedals against a direct-drive, about +2% to +9% is expected.
+          Green here only means that average is in-band; it does not mean the two meters agree in
+          watts, and it is secondary to consistency.
+        </p>
+        <p>
+          <b>Fit</b> is the straight line <code>pedals &approx; slope &times; trainer + intercept</code>.
+          Slope near 1 with a small intercept is a constant offset. A slope away from 1, or a large
+          intercept, means the gap itself changes with power.
+        </p>
+      </div>
       <table class="results">
         <thead>
-          <tr><th>Cell</th><th>Trainer</th><th>Pedals</th><th>Ratio</th><th>Diff</th><th>In zone</th><th>Samples</th></tr>
+          <tr>
+            <th>Cell</th>
+            <th>Trainer</th>
+            <th>Pedals</th>
+            <th title="Pedal mean divided by trainer mean in this cell">Ratio</th>
+            <th title="How far the ratio is from 1.00, as a percent">Diff</th>
+            <th title="Share of the measurement window spent on the target cadence">In zone</th>
+            <th title="Trainer / pedal readings kept after the cadence filter">Samples</th>
+          </tr>
         </thead>
         <tbody id="results-body"></tbody>
       </table>
+      <dl class="col-help">
+        <div>
+          <dt>In zone</dt>
+          <dd>
+            Share of the measurement window where trainer cadence stayed within the protocol
+            tolerance of the target. Below 70% the cell is excluded, so a sloppy cadence cannot
+            poison the ratio. Cadence comes from the trainer, not the pedals, so a pedal cadence
+            error cannot cherry-pick the samples.
+          </dd>
+        </div>
+        <div>
+          <dt>Samples</dt>
+          <dd>
+            Trainer / pedal power readings kept after that cadence filter. At least 15 of each
+            are required before the cell counts. Pedals report once per crank revolution, so this
+            number is usually smaller than the trainer&rsquo;s ~1 Hz stream.
+          </dd>
+        </div>
+      </dl>
       <ul id="result-notes" class="notes"></ul>
       <div class="row">
         <a class="secondary button" href="/api/session.json" download>Download session JSON</a>
