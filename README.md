@@ -59,7 +59,65 @@ Exit code: `0` if any **suspect** ride or **severe** quality finding; `1` if cle
 - Indoor vs outdoor are matched for baselines when enough rides exist in the same context.
 - Quality flags (dropouts, stuck power, spikes, zero bursts) often explain weird ratios without implying a calibration offset.
 
-## Tests
+# Dual power source comparison
+
+Heart rate is a noisy bridge between two power meters. `power-meter-compare` removes it: it drives a
+trainer through an ERG ladder while recording a second power meter at the same time, on one clock.
+
+```powershell
+power-meter-compare --scan                        # find BLE devices
+power-meter-compare --trainer-address AA:BB:CC:DD:EE:FF --out runs\test1
+power-meter-compare --simulate --sim-pedal-torque-gain 0.003   # no hardware needed
+power-meter-compare --analyse runs\test1.json     # re-analyse a saved session
+```
+
+## The protocol
+
+Each ERG step is split into two cadence halves. At a fixed power, 70 rpm loads the cranks about 29%
+harder than 90 rpm, so one step yields two crank torques and the grid separates a torque-dependent
+error from a power-dependent one. The runner guides you to the target cadence, discards a settling
+window after every power *and* cadence change, and only measures samples where you were actually in
+the band.
+
+| Preset | Ladder | Per cadence | Warm-up |
+|--------|--------|-------------|---------|
+| `standard` | 150–350 W in five steps, plus a repeat of the first | 2 min | 10 min |
+| `quick` | 150 / 250 / 350 W | 90 s | 5 min |
+
+Zero-offset the pedals and run a trainer spindown at the end of the warm-up, before the first step.
+The repeated opening step measures drift across the session rather than calibration.
+
+## How to interpret the result
+
+The primary verdict is **consistency, not absolute offset**. A left-only pedal read against a
+direct-drive trainer *should* sit a few percent high, because of drivetrain loss plus whatever the
+rider's left/right imbalance is — and neither of those varies with power or cadence. So:
+
+- A ratio that stays **flat** across the grid means the two sources are realistically aligned,
+  whatever its value. This verdict needs no assumptions.
+- A ratio that **drifts** across the grid cannot be explained by imbalance or drivetrain loss, and
+  points at a real fault: a strain-gauge nonlinearity, or progressive slip in the trainer.
+- `ratio by cadence` isolates torque: if the two cadence halves disagree at matched power, the error
+  tracks crank torque rather than power.
+- `cadence bias` matters because pedal power is derived from angular velocity, so a cadence error
+  feeds straight into power.
+
+The secondary offset light compares the mean ratio against an expected band (default 1.02–1.09) and
+is a convention, not a measurement — without a single-leg block you can measure the disagreement but
+not attribute it.
+
+## Hardware
+
+```powershell
+pip install -e .[hardware]
+```
+
+The trainer is driven over Bluetooth FTMS. The pedals are read over ANT+ by default, which supports
+unlimited concurrent listeners so your head unit can keep recording the same ride; that needs an
+ANT+ USB stick and libusb drivers. `--pedals-ble` is available as a fallback but consumes one of the
+pedals' few BLE connection slots. Close Zwift first — BLE trainer control is exclusive.
+
+# Tests
 
 ```powershell
 python -m pytest -q

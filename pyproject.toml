@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "power-meter-audit"
-version = "0.2.0"
+version = "0.3.0"
 description = "Find inconsistent power readings across cycling FIT activities"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,8 +13,17 @@ dependencies = [
   "numpy>=1.26.0",
 ]
 
+[project.optional-dependencies]
+# Only needed to talk to real hardware; the simulator and analysis run without them.
+hardware = [
+  "bleak>=0.22",
+  "pycycling>=0.4.1",
+  "openant>=1.3",
+]
+
 [project.scripts]
 power-meter-audit = "power_meter_audit.cli:main"
+power-meter-compare = "power_meter_audit.compare_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
