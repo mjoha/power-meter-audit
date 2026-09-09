@@ -48,6 +48,7 @@ class SourceMonitor:
     label: str = ""
     last: Sample | None = None
     error: str | None = None
+    detail: str | None = None
     arrivals: deque = field(default_factory=lambda: deque(maxlen=200))
 
     def record(self, sample: Sample) -> None:
@@ -78,6 +79,7 @@ class SourceMonitor:
                 "hz": 0.0,
                 "alive": False,
                 "error": self.error,
+                "detail": self.detail,
             }
         return {
             "label": self.label,
@@ -86,6 +88,7 @@ class SourceMonitor:
             "hz": round(self.hz, 2),
             "alive": self.alive,
             "error": None,
+            "detail": self.detail,
         }
 
 
@@ -223,6 +226,9 @@ class CompareServer:
                 await source.connect()
             except Exception as exc:  # noqa: BLE001 - reported per source
                 self.monitors[name].error = str(exc) or type(exc).__name__
+            # Which of a trainer's overlapping power services is actually in use
+            # is worth stating rather than leaving to be inferred.
+            self.monitors[name].detail = getattr(source, "data_source", None)
 
         if self._driver is not None:
             await self._driver.start()

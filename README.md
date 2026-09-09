@@ -134,10 +134,16 @@ against a system Python such as `C:\Python310` that needs admin rights and fails
 `could not create '...\Scripts\fitdump': Permission denied`, taking the whole install down with it.
 A venv you own has no such problem.
 
-The trainer is driven over Bluetooth FTMS. The pedals are read over ANT+ by default, which supports
-unlimited concurrent listeners so your head unit can keep recording the same ride. `--pedals-ble` is
-available as a fallback but consumes one of the pedals' few BLE connection slots. Close Zwift first
-— BLE trainer control is exclusive.
+The trainer is driven over Bluetooth FTMS. Control (ERG target) always goes over the
+Fitness Machine Control Point; readings come from Indoor Bike Data when the trainer
+serves it, and from the Cycling Power Service otherwise. Wahoo exposes both, and a
+firmware missing Indoor Bike Data used to abort the handshake before control was
+requested, so every target write was ignored and the trainer freewheeled. Close Zwift
+first — BLE trainer control is exclusive.
+
+The pedals are read over ANT+ by default, which supports unlimited concurrent listeners
+so your head unit can keep recording the same ride. `--pedals-ble` is available as a
+fallback but consumes one of the pedals' few BLE connection slots.
 
 ### ANT+ on Windows
 

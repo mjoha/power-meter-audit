@@ -18,6 +18,38 @@ from power_meter_audit.live.sources import PEDALS, TRAINER, Clock, PowerSource, 
 
 FTMS_SERVICE_UUID = "00001826-0000-1000-8000-00805f9b34fb"
 CYCLING_POWER_SERVICE_UUID = "00001818-0000-1000-8000-00805f9b34fb"
+FTMS_INDOOR_BIKE_DATA_UUID = "00002ad2-0000-1000-8000-00805f9b34fb"
+FTMS_CONTROL_POINT_UUID = "00002ad9-0000-1000-8000-00805f9b34fb"
+CPS_MEASUREMENT_UUID = "00002a63-0000-1000-8000-00805f9b34fb"
+
+KNOWN_CHARACTERISTICS = {
+    FTMS_INDOOR_BIKE_DATA_UUID: "FTMS indoor bike data",
+    FTMS_CONTROL_POINT_UUID: "FTMS control point",
+    "00002ada-0000-1000-8000-00805f9b34fb": "FTMS status",
+    "00002acc-0000-1000-8000-00805f9b34fb": "FTMS feature",
+    "00002ad8-0000-1000-8000-00805f9b34fb": "FTMS supported power range",
+    CPS_MEASUREMENT_UUID: "cycling power measurement",
+    "00002a65-0000-1000-8000-00805f9b34fb": "cycling power feature",
+    "00002a5b-0000-1000-8000-00805f9b34fb": "CSC measurement",
+}
+
+
+def describe_characteristics(client: Any) -> list[str]:
+    """Name the characteristics a connected device serves, for diagnosis.
+
+    Which of the overlapping power services a trainer actually implements
+    varies by model and firmware, and the only way to stop guessing is to look.
+    """
+    described: list[str] = []
+    try:
+        characteristics = list(client.services.characteristics.values())
+    except Exception:  # noqa: BLE001 - diagnosis must not break a connection
+        return described
+    for char in characteristics:
+        uuid = str(getattr(char, "uuid", "")).lower()
+        name = KNOWN_CHARACTERISTICS.get(uuid)
+        described.append(f"{name} ({uuid[4:8]})" if name else uuid)
+    return described
 
 
 def ensure_usb_backend() -> str:
@@ -141,10 +173,17 @@ def _first_attr(obj: Any, names: tuple[str, ...]) -> Any:
 
 
 class FtmsTrainer(TrainerSource):
-    """Wahoo Kickr (and any FTMS trainer) over Bluetooth LE."""
+    """Wahoo Kickr (and any FTMS trainer) over Bluetooth LE.
+
+    Control always goes over FTMS. Readings come from FTMS Indoor Bike Data
+    when the trainer serves it and from the Cycling Power Service otherwise:
+    Wahoo trainers expose both services, and not every firmware includes Indoor
+    Bike Data, so treating it as mandatory loses the trainer entirely.
+    """
 
     POWER_FIELDS = ("instant_power", "instantaneous_power", "power")
     CADENCE_FIELDS = ("instant_cadence", "instantaneous_cadence", "cadence")
+    CPS_POWER_FIELDS = ("instantaneous_power", "instant_power", "power")
 
     def __init__(self, address: str, clock: Clock, label: str = "Kickr") -> None:
         super().__init__(TRAINER, label)
@@ -152,19 +191,39 @@ class FtmsTrainer(TrainerSource):
         self._clock = clock
         self._client = None
         self._ftms = None
+        self._cps = None
+        self._cadence = CrankCadenceTracker()
+        self.data_source: str | None = None
+        self.characteristics: list[str] = []
 
     async def connect(self) -> None:
         from bleak import BleakClient
         from pycycling.fitness_machine_service import FitnessMachineService
 
+        # The UI connects to verify the radios, then Start runs the protocol on
+        # the same objects. Reconnecting is exclusive on BLE, so a second
+        # connect either fails or rediscovers a stub GATT table missing Indoor
+        # Bike Data — which is how 0x2AD2 "was not found" appeared at Start
+        # while the trainer was already streaming.
+        if self.connected and self._client is not None and self._ftms is not None:
+            return
+
         self._client = BleakClient(self.address)
         await self._client.connect()
+        self.characteristics = describe_characteristics(self._client)
         self._ftms = FitnessMachineService(self._client)
 
-        self._ftms.set_indoor_bike_data_handler(self._on_indoor_bike_data)
-        await self._ftms.enable_indoor_bike_data_notify()
-        # Indications on the control point must be enabled before any write, and
-        # control must be requested before any target command, or writes fail.
+        # Control is established before any data subscription. Doing it the
+        # other way round cost a whole session of ERG: subscribing to a
+        # characteristic the trainer did not serve raised, aborting connect
+        # before control was ever requested, so every later target write was
+        # accepted and ignored and the trainer just freewheeled.
+        #
+        # Indications on the control point must be enabled before any write,
+        # and control must be requested before any target command, or the
+        # writes fail. Start-or-Resume then puts the machine into a training
+        # session; without it, Set Target Power is accepted and ignored and
+        # the trainer freewheels at whatever resistance it last had.
         await self._ftms.enable_control_point_indicate()
         await self._ftms.request_control()
 
@@ -179,7 +238,60 @@ class FtmsTrainer(TrainerSource):
         else:
             await self._ftms.request_control()
 
+        try:
+            await self._ftms.start_or_resume()
+        except Exception:  # noqa: BLE001 - some firmwares have no Start opcode
+            pass
+
+        await self._subscribe_to_readings()
         self.connected = True
+
+    def _serves(self, uuid: str) -> bool:
+        """True if the connected device exposes this characteristic.
+
+        Compared against every discovered UUID, not looked up through bleak's
+        table: WinRT sometimes returns UUID objects, sometimes strings, and
+        `get_characteristic` then misses a characteristic that is sitting
+        right there — which is 0x2AD2 "was not found" with the trainer live.
+        """
+        needle = str(uuid).lower().replace("-", "")
+        short = needle[4:8] if len(needle) >= 8 else needle
+        try:
+            characteristics = list(self._client.services.characteristics.values())
+        except Exception:  # noqa: BLE001 - treat an unreadable table as absent
+            return False
+        for char in characteristics:
+            have = str(getattr(char, "uuid", "")).lower().replace("-", "")
+            if have == needle or have[4:8] == short:
+                return True
+        return False
+
+    async def _subscribe_to_readings(self) -> None:
+        """Pick a reading source from what the trainer actually serves.
+
+        Probed rather than attempted, so an absent characteristic is a choice
+        between services instead of an exception mid-handshake.
+        """
+        if self._serves(FTMS_INDOOR_BIKE_DATA_UUID):
+            self._ftms.set_indoor_bike_data_handler(self._on_indoor_bike_data)
+            await self._ftms.enable_indoor_bike_data_notify()
+            self.data_source = "FTMS indoor bike data"
+            return
+
+        if self._serves(CPS_MEASUREMENT_UUID):
+            from pycycling.cycling_power_service import CyclingPowerService
+
+            self._cps = CyclingPowerService(self._client)
+            self._cps.set_cycling_power_measurement_handler(self._on_power_measurement)
+            await self._cps.enable_cycling_power_measurement_notifications()
+            self.data_source = "cycling power service"
+            return
+
+        raise RuntimeError(
+            "The trainer serves neither FTMS indoor bike data (0x2AD2) nor a cycling "
+            "power measurement (0x2A63), so there is nothing to record from it. It "
+            f"exposes: {', '.join(self.characteristics) or 'nothing readable'}"
+        )
 
     def _on_indoor_bike_data(self, data: Any) -> None:
         watts = _first_attr(data, self.POWER_FIELDS)
@@ -189,6 +301,16 @@ class FtmsTrainer(TrainerSource):
             float(watts) if watts is not None else None,
             float(cadence) if cadence is not None else None,
         )
+
+    def _on_power_measurement(self, data: Any) -> None:
+        watts = _first_attr(data, self.CPS_POWER_FIELDS)
+        now = self._clock.now()
+        cadence = self._cadence.update(
+            _first_attr(data, ("cumulative_crank_revs",)),
+            _first_attr(data, ("last_crank_event_time",)),
+            now,
+        )
+        self.emit(now, float(watts) if watts is not None else None, cadence)
 
     async def set_target_power(self, watts: int) -> None:
         if self._ftms is None:
@@ -231,6 +353,9 @@ class AntPlusPedals(PowerSource):
         from openant.devices import ANTPLUS_NETWORK_KEY
         from openant.devices.power_meter import PowerMeter
         from openant.easy.node import Node
+
+        if self.connected:
+            return
 
         self._loop = asyncio.get_running_loop()
         ensure_usb_backend()
@@ -302,6 +427,9 @@ class BlePedals(PowerSource):
     async def connect(self) -> None:
         from bleak import BleakClient
         from pycycling.cycling_power_service import CyclingPowerService
+
+        if self.connected and self._client is not None:
+            return
 
         self._client = BleakClient(self.address)
         await self._client.connect()

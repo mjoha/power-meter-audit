@@ -107,6 +107,16 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .source-card.failed { border-color: var(--red); }
 .source-card.failed .dot { background: var(--red); }
 .source-error { color: var(--red); font-size: 0.8rem; margin-top: 0.4rem; line-height: 1.35; }
+.source-detail { margin-top: 0.35rem; font-style: italic; }
+
+.warnings {
+  list-style: none; margin: 0.9rem 0 0; padding: 0;
+}
+.warnings li {
+  border-left: 3px solid var(--amber); background: #fdf8ec;
+  color: var(--amber); font-size: 0.84rem; line-height: 1.4;
+  padding: 0.4rem 0.7rem; margin-bottom: 0.35rem; border-radius: 0 6px 6px 0;
+}
 .big { font-size: 2.1rem; font-weight: 600; letter-spacing: -0.02em; }
 .big .unit, .live-card .unit, .cadence-now .unit { font-size: 0.9rem; color: var(--muted); margin-left: 0.2rem; font-weight: 400; }
 

@@ -314,6 +314,9 @@ function renderSources() {
       note.textContent = source.error || "";
       note.classList.toggle("hidden", !source.error);
     }
+    const detail = card.querySelector(".source-detail");
+    detail.textContent = source.detail ? `reading from ${source.detail}` : "";
+    detail.classList.toggle("hidden", !source.detail);
   });
 }
 
@@ -362,6 +365,15 @@ function renderRun() {
     $("segment-sub").textContent =
       `${phase} · ${formatClock(segment.remaining_s)} left in this cell`;
   }
+
+  const warnings = $("warnings");
+  warnings.innerHTML = "";
+  (state.warnings || []).forEach((text) => {
+    const item = document.createElement("li");
+    item.textContent = text;
+    warnings.appendChild(item);
+  });
+  warnings.classList.toggle("hidden", !(state.warnings || []).length);
 
   renderCadence(segment);
   renderLive();

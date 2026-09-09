@@ -20,6 +20,7 @@ from power_meter_audit.live.protocol import (
     quick_protocol,
     standard_protocol,
 )
+from power_meter_audit.live.runner import ControlWarning
 from power_meter_audit.live.session import SessionLog
 from power_meter_audit.live.simulator import MeterModel, RiderModel, SimulatedRig
 from power_meter_audit.live.sources import PEDALS, TRAINER
@@ -155,6 +156,97 @@ def test_repeated_condition_reports_drift():
     labels = {label for label, _ in report.drift}
     assert labels == {"200W @70rpm", "200W @90rpm"}
     assert all(abs(delta) < 0.03 for _, delta in report.drift)
+
+
+def test_a_runner_does_not_reconnect_an_already_live_source():
+    """The UI connects to verify, then Start runs the protocol on the same objects.
+
+    Reconnecting would be exclusive on BLE and is what produced 0x2AD2-not-found
+    at Start while both sources were already streaming.
+    """
+    connects = {"trainer": 0, "pedals": 0}
+    disconnects = {"trainer": 0, "pedals": 0}
+    rig = SimulatedRig()
+
+    original_t = rig.trainer.connect
+    original_p = rig.pedals.connect
+    original_td = rig.trainer.disconnect
+    original_pd = rig.pedals.disconnect
+
+    async def t_connect():
+        connects["trainer"] += 1
+        await original_t()
+
+    async def p_connect():
+        connects["pedals"] += 1
+        await original_p()
+
+    async def t_disconnect():
+        disconnects["trainer"] += 1
+        await original_td()
+
+    async def p_disconnect():
+        disconnects["pedals"] += 1
+        await original_pd()
+
+    rig.trainer.connect = t_connect
+    rig.pedals.connect = p_connect
+    rig.trainer.disconnect = t_disconnect
+    rig.pedals.disconnect = p_disconnect
+
+    async def already_connected():
+        await rig.trainer.connect()
+        await rig.pedals.connect()
+        assert rig.trainer.connected and rig.pedals.connected
+        connects["trainer"] = 0
+        connects["pedals"] = 0
+        from power_meter_audit.live.protocol import quick_protocol
+        from power_meter_audit.live.harness import run_simulated_session
+
+        await run_simulated_session(quick_protocol(), rig=rig)
+
+    asyncio.run(already_connected())
+    assert connects == {"trainer": 0, "pedals": 0}
+    assert disconnects == {"trainer": 0, "pedals": 0}
+    assert rig.trainer.connected and rig.pedals.connected
+
+
+def test_a_trainer_ignoring_the_target_is_reported():
+    """A control-point write can be accepted and then ignored.
+
+    That raises nothing, so an unengaged ERG is invisible unless the actual
+    power is compared against the commanded target — which is how a whole
+    session got ridden at the wrong resistance without any indication.
+    """
+    rig = SimulatedRig()
+
+    async def swallow_target(watts: int) -> None:
+        return None
+
+    rig.trainer.set_target_power = swallow_target
+
+    warnings: list[str] = []
+
+    def collect(event):
+        if isinstance(event, ControlWarning):
+            warnings.append(event.message)
+
+    asyncio.run(run_simulated_session(quick_protocol(), rig=rig, on_event=collect))
+
+    assert warnings, "an unengaged ERG must not pass silently"
+    assert "ERG does not look engaged" in warnings[0]
+    assert "against a" in warnings[0]  # names the target it failed to hold
+
+
+def test_a_trainer_holding_the_target_stays_quiet():
+    warnings = []
+    asyncio.run(
+        run_simulated_session(
+            quick_protocol(),
+            on_event=lambda e: warnings.append(e) if isinstance(e, ControlWarning) else None,
+        )
+    )
+    assert warnings == []
 
 
 def test_dropouts_lower_the_reported_yield():

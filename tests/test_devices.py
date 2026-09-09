@@ -8,18 +8,23 @@ pycycling or openant present.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 
 import pytest
 
 from power_meter_audit.live.devices import (
+    CPS_MEASUREMENT_UUID,
+    FTMS_CONTROL_POINT_UUID,
+    FTMS_INDOOR_BIKE_DATA_UUID,
     AntPlusPedals,
     BlePedals,
     CrankCadenceTracker,
     FtmsTrainer,
     _first_attr,
     ant_error_hint,
+    describe_characteristics,
     ensure_usb_backend,
 )
 
@@ -248,6 +253,211 @@ class StubClock:
 
     async def sleep(self, seconds: float) -> None:
         self.t += seconds
+
+
+async def _noop(*args, **kwargs):
+    return None
+
+
+class FakeServices:
+    """Stands in for bleak's discovered characteristic table."""
+
+    def __init__(self, uuids):
+        self._uuids = {u.lower() for u in uuids}
+        self.characteristics = {
+            i: types.SimpleNamespace(uuid=u) for i, u in enumerate(sorted(self._uuids))
+        }
+
+    def get_characteristic(self, specifier):
+        return types.SimpleNamespace(uuid=specifier) if str(specifier).lower() in self._uuids else None
+
+
+class FakeFtms:
+    """Records the handshake order, since that is what the ordering bug was."""
+
+    def __init__(self, serves):
+        self.calls = []
+        self._serves = serves
+
+    def set_indoor_bike_data_handler(self, handler):
+        self.calls.append("set_data_handler")
+
+    async def enable_indoor_bike_data_notify(self):
+        self.calls.append("enable_data_notify")
+        if FTMS_INDOOR_BIKE_DATA_UUID not in self._serves:
+            raise RuntimeError(f"Characteristic {FTMS_INDOOR_BIKE_DATA_UUID} was not found!")
+
+    async def start_or_resume(self):
+        self.calls.append("start_or_resume")
+
+    async def enable_control_point_indicate(self):
+        self.calls.append("enable_control_indicate")
+
+    async def request_control(self):
+        self.calls.append("request_control")
+
+    async def reset(self):
+        self.calls.append("reset")
+
+
+class TestTrainerReadingSource:
+    """A trainer must end up controllable regardless of which power service it
+    serves. Wahoo exposes both FTMS Indoor Bike Data and the Cycling Power
+    Service, and a firmware missing the former used to abort the connect before
+    control was ever requested, leaving ERG silently disengaged all session.
+    """
+
+    def _trainer(self, serves):
+        trainer = FtmsTrainer("AA:BB:CC:DD:EE:FF", StubClock())
+        trainer._client = types.SimpleNamespace(services=FakeServices(serves))
+        trainer._ftms = FakeFtms(serves)
+        return trainer
+
+    def test_indoor_bike_data_is_preferred_when_served(self):
+        trainer = self._trainer({FTMS_INDOOR_BIKE_DATA_UUID, CPS_MEASUREMENT_UUID})
+        asyncio.run(trainer._subscribe_to_readings())
+        assert trainer.data_source == "FTMS indoor bike data"
+
+    def test_falls_back_to_cycling_power_when_indoor_bike_data_is_absent(self, monkeypatch):
+        trainer = self._trainer({CPS_MEASUREMENT_UUID})
+        created = {}
+
+        class FakeCps:
+            def __init__(self, client):
+                created["client"] = client
+
+            def set_cycling_power_measurement_handler(self, handler):
+                created["handler"] = handler
+
+            async def enable_cycling_power_measurement_notifications(self):
+                created["subscribed"] = True
+
+        monkeypatch.setitem(
+            sys.modules,
+            "pycycling.cycling_power_service",
+            types.SimpleNamespace(CyclingPowerService=FakeCps),
+        )
+        asyncio.run(trainer._subscribe_to_readings())
+
+        assert trainer.data_source == "cycling power service"
+        assert created["subscribed"]
+        # The failing subscribe must never be attempted, so it cannot raise.
+        assert "enable_data_notify" not in trainer._ftms.calls
+
+    def test_no_usable_service_is_reported_with_what_was_found(self):
+        trainer = self._trainer({FTMS_CONTROL_POINT_UUID})
+        trainer.characteristics = describe_characteristics(trainer._client)
+        with pytest.raises(RuntimeError) as excinfo:
+            asyncio.run(trainer._subscribe_to_readings())
+        assert "0x2AD2" in str(excinfo.value)
+        assert "FTMS control point" in str(excinfo.value)
+
+    def test_cycling_power_readings_carry_derived_cadence(self, monkeypatch):
+        trainer = self._trainer({CPS_MEASUREMENT_UUID})
+        samples = []
+        trainer.add_handler(samples.append)
+
+        class Measurement:
+            instantaneous_power = 210
+            cumulative_crank_revs = 0
+            last_crank_event_time = 0
+
+        first = Measurement()
+        trainer._on_power_measurement(first)
+        second = Measurement()
+        second.cumulative_crank_revs = 1
+        second.last_crank_event_time = round(TICKS_PER_S * 60 / 90)
+        trainer._clock.t = 60 / 90
+        trainer._on_power_measurement(second)
+
+        assert [s.watts for s in samples] == [210.0, 210.0]
+        assert samples[1].cadence == pytest.approx(90.0, abs=0.5)
+
+    def test_control_is_established_before_any_data_subscription(self, monkeypatch):
+        """The ordering is the whole bug: a trainer that does not serve Indoor
+        Bike Data raised on subscribe, aborting connect before control was
+        requested, so ERG was never enabled and every target write was ignored.
+        """
+        serves = {FTMS_CONTROL_POINT_UUID, FTMS_INDOOR_BIKE_DATA_UUID}
+        ftms = FakeFtms(serves)
+        client = types.SimpleNamespace(
+            services=FakeServices(serves), connect=_noop, disconnect=_noop
+        )
+
+        monkeypatch.setitem(
+            sys.modules, "bleak", types.SimpleNamespace(BleakClient=lambda address: client)
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "pycycling.fitness_machine_service",
+            types.SimpleNamespace(FitnessMachineService=lambda c: ftms),
+        )
+
+        trainer = FtmsTrainer("AA:BB:CC:DD:EE:FF", StubClock())
+        asyncio.run(trainer.connect())
+
+        assert trainer.connected
+        assert ftms.calls.index("request_control") < ftms.calls.index("enable_data_notify")
+        assert ftms.calls.index("enable_control_indicate") < ftms.calls.index("request_control")
+        # Reset can revoke the control it was just granted, so it is retaken.
+        assert ftms.calls.count("request_control") == 2
+        assert ftms.calls.index("reset") < ftms.calls.index("enable_data_notify")
+        # Start-or-Resume is what actually engages ERG; without it, target
+        # writes are accepted and the trainer freewheels.
+        assert "start_or_resume" in ftms.calls
+        assert ftms.calls.index("start_or_resume") < ftms.calls.index("enable_data_notify")
+
+    def test_a_second_connect_does_not_rebuild_the_ble_client(self, monkeypatch):
+        """Start must not open a second exclusive BLE link on an already-live trainer."""
+        serves = {FTMS_CONTROL_POINT_UUID, FTMS_INDOOR_BIKE_DATA_UUID}
+        clients: list[object] = []
+
+        def make_client(address):
+            client = types.SimpleNamespace(
+                services=FakeServices(serves), connect=_noop, disconnect=_noop
+            )
+            clients.append(client)
+            return client
+
+        monkeypatch.setitem(sys.modules, "bleak", types.SimpleNamespace(BleakClient=make_client))
+        monkeypatch.setitem(
+            sys.modules,
+            "pycycling.fitness_machine_service",
+            types.SimpleNamespace(FitnessMachineService=lambda c: FakeFtms(serves)),
+        )
+
+        trainer = FtmsTrainer("AA:BB:CC:DD:EE:FF", StubClock())
+        asyncio.run(trainer.connect())
+        first = trainer._client
+        asyncio.run(trainer.connect())
+
+        assert trainer._client is first
+        assert len(clients) == 1
+
+    def test_serves_matches_uuid_objects_and_dashed_strings(self):
+        import uuid
+
+        trainer = FtmsTrainer("AA:BB:CC:DD:EE:FF", StubClock())
+        trainer._client = types.SimpleNamespace(
+            services=types.SimpleNamespace(
+                characteristics={
+                    1: types.SimpleNamespace(uuid=uuid.UUID(FTMS_INDOOR_BIKE_DATA_UUID)),
+                    2: types.SimpleNamespace(uuid=CPS_MEASUREMENT_UUID.upper()),
+                }
+            )
+        )
+        assert trainer._serves(FTMS_INDOOR_BIKE_DATA_UUID)
+        assert trainer._serves(CPS_MEASUREMENT_UUID)
+        assert not trainer._serves(FTMS_CONTROL_POINT_UUID)
+
+    def test_characteristics_are_named_for_diagnosis(self):
+        described = describe_characteristics(
+            types.SimpleNamespace(
+                services=FakeServices({FTMS_CONTROL_POINT_UUID, CPS_MEASUREMENT_UUID})
+            )
+        )
+        assert any("FTMS control point" in d for d in described)
+        assert any("cycling power measurement" in d for d in described)
 
 
 class TestRealPayloadParsing:
