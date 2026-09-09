@@ -155,6 +155,12 @@ def test_one_radio_failing_leaves_the_other_usable_and_named():
             assert "libusb" in state["sources"]["pedals"]["error"]
             assert "libusb" in state["error"]
 
+            # A source that failed must not show numbers beside its failure,
+            # whatever is still arriving from it.
+            pedals = state["sources"]["pedals"]
+            assert pedals["watts"] is None and pedals["cadence"] is None
+            assert pedals["hz"] == 0.0 and pedals["alive"] is False
+
             # Comparing needs both, and the refusal has to say so.
             response = await test_client.post("/api/start")
             assert response.status == 400

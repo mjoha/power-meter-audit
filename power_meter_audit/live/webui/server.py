@@ -67,13 +67,25 @@ class SourceMonitor:
         return bool(self.arrivals) and (time.monotonic() - self.arrivals[-1]) < 3.0
 
     def snapshot(self) -> dict:
+        # A source that failed to connect must not show numbers, whatever is
+        # still arriving from it. Reporting watts next to the failure reads as
+        # "working anyway" and is the opposite of what happened.
+        if self.error is not None:
+            return {
+                "label": self.label,
+                "watts": None,
+                "cadence": None,
+                "hz": 0.0,
+                "alive": False,
+                "error": self.error,
+            }
         return {
             "label": self.label,
             "watts": self.last.watts if self.last else None,
             "cadence": self.last.cadence if self.last else None,
             "hz": round(self.hz, 2),
             "alive": self.alive,
-            "error": self.error,
+            "error": None,
         }
 
 

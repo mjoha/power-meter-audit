@@ -257,14 +257,17 @@ function render() {
   banner(state.error || "");
 }
 
+function offlineSources() {
+  return Object.values(state.sources)
+    .filter((source) => source.error)
+    .map((source) => source.label);
+}
+
 function renderPhase() {
   const pill = $("phase-pill");
-  const offline = Object.values(state.sources)
-    .filter((source) => source.error)
-    .map((source) => source.label.toLowerCase());
   const labels = {
     idle: "disconnected",
-    partial: `${offline.join(" & ")} offline`,
+    partial: `${offlineSources().join(" & ").toLowerCase()} offline`,
     connected: "connected",
     running: "running",
     finished: "finished",
@@ -343,10 +346,16 @@ function renderRun() {
 
   if (!segment) {
     $("segment-label").textContent = state.phase === "finished" ? "Session complete" : "Not started";
-    $("segment-sub").textContent =
-      state.phase === "finished"
-        ? "Review the grid below, or download the raw samples."
-        : "Connect the devices, then start the protocol.";
+    if (state.phase === "finished") {
+      $("segment-sub").textContent = "Review the grid below, or download the raw samples.";
+    } else if (state.phase === "partial") {
+      // Saying "connect the devices" here would be wrong: one of them is connected.
+      $("segment-sub").textContent =
+        `Comparing needs both sources. ${offlineSources().join(" and ")} did not connect —` +
+        ` see the Devices tab.`;
+    } else {
+      $("segment-sub").textContent = "Connect the devices, then start the protocol.";
+    }
   } else {
     $("segment-label").textContent = `${segment.label} — ${segment.target_watts} W`;
     const phase = segment.measuring ? "measuring" : "settling";
