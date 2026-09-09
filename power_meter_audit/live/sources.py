@@ -93,11 +93,16 @@ class PowerSource(abc.ABC):
         self.name = name
         self.label = label or name
         self._handlers: list[SampleHandler] = []
+        self._clock: Clock | None = None
         self.connected = False
         self.last_sample: Sample | None = None
 
     def add_handler(self, handler: SampleHandler) -> None:
         self._handlers.append(handler)
+
+    def set_clock(self, clock: Clock) -> None:
+        """Rebind the session clock, so a new run stamps samples from zero."""
+        self._clock = clock
 
     def emit(self, t: float, watts: float | None, cadence: float | None) -> None:
         sample = Sample(t=t, source=self.name, watts=watts, cadence=cadence)

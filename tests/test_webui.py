@@ -165,6 +165,60 @@ def test_full_run_produces_a_report_and_downloads():
     asyncio.run(scenario())
 
 
+def test_run_still_records_after_a_long_connection_preview():
+    """A preview advances simulated time a long way before the session starts.
+
+    The run then restarts the session clock at zero, and the rig has to be
+    rewound with it — otherwise its next-sample times stay parked in the future
+    and the whole session records nothing.
+    """
+
+    async def scenario():
+        async with client() as (test_client, server):
+            await test_client.post("/api/protocol", json=FAST_PROTOCOL)
+            await test_client.post("/api/connect", json={"mode": "simulate", "speed": 300})
+
+            # Idle on the verify screen long enough to push simulated time well
+            # past the end of the protocol that is about to run.
+            await asyncio.sleep(2.0)
+            preview = await (await test_client.get("/api/state")).json()
+            assert preview["sources"]["trainer"]["alive"]
+
+            await test_client.post("/api/start")
+            state = await _wait_for_phase(test_client, "finished")
+
+            report = state["report"]
+            assert all(cell["usable"] for cell in report["cells"]), [
+                (cell["label"], cell["reason"]) for cell in report["cells"]
+            ]
+            assert all(cell["trainer_n"] > 0 and cell["pedal_n"] > 0 for cell in report["cells"])
+            assert report["consistency"] != "unknown"
+            assert report["mean_ratio"] is not None
+
+    asyncio.run(scenario())
+
+
+def test_accelerated_time_keeps_the_sample_rate_in_session_time():
+    """Sample density must come from the session clock, not the tick rate."""
+
+    async def scenario():
+        async with client() as (test_client, server):
+            await test_client.post("/api/protocol", json=FAST_PROTOCOL)
+            await test_client.post("/api/connect", json={"mode": "simulate", "speed": 300})
+            await test_client.post("/api/start")
+            await _wait_for_phase(test_client, "finished")
+
+            log = server.log
+            assert log is not None
+            # 240 s of session time at 1 Hz and 4 Hz, allowing for edges.
+            trainer = [s for s in log.samples if s.source == "trainer"]
+            pedals = [s for s in log.samples if s.source == "pedals"]
+            assert 200 < len(trainer) < 280
+            assert 3.5 < len(pedals) / len(trainer) < 4.5
+
+    asyncio.run(scenario())
+
+
 def test_live_status_reports_cadence_guidance_during_a_run():
     async def scenario():
         async with client() as (test_client, _):

@@ -100,7 +100,20 @@ class SimulatedRig:
     def set_target_cadence(self, rpm: float | None) -> None:
         self._target_rpm = float(rpm) if rpm is not None else None
 
+    def reset(self, t: float = 0.0) -> None:
+        """Rewind the emission schedule so a new session starts from `t`.
+
+        Without this, a rig that streamed during a connection preview has its
+        next-sample times parked far in the future and emits nothing once the
+        session clock restarts at zero.
+        """
+        self._last_t = t
+        self._next_trainer = t
+        self._next_pedals = t
+
     def tick(self, t: float) -> None:
+        if t + 1e-9 < self._last_t:
+            self.reset(t)
         dt = max(0.0, t - self._last_t)
         self._last_t = t
         if dt <= 0.0:
@@ -115,22 +128,34 @@ class SimulatedRig:
         alpha_c = 1.0 - math.exp(-dt / max(self.rider.cadence_tau_s, 1e-6))
         self._cadence += (goal - self._cadence) * alpha_c
 
-        observed_watts = max(
-            0.0, self._true_watts + self._rng.gauss(0.0, self.rider.power_noise_w)
+        # Emit every sample that fell due since the last tick, so the sample
+        # rate stays 1 Hz / 4 Hz in session time no matter how coarsely (or how
+        # fast) the driver ticks.
+        self._next_trainer = self._drain(
+            self._next_trainer, 1.0 / self.trainer_hz, t, self.trainer, self.trainer_model
         )
-        observed_cadence = max(
-            0.0, self._cadence + self._rng.gauss(0.0, self.rider.cadence_noise_rpm)
+        self._next_pedals = self._drain(
+            self._next_pedals, 1.0 / self.pedal_hz, t, self.pedals, self.pedal_model
         )
 
-        if t >= self._next_trainer:
-            self._next_trainer = t + 1.0 / self.trainer_hz
-            watts, cadence = self.trainer_model.report(observed_watts, observed_cadence, self._rng)
-            self.trainer.emit(t, watts, cadence)
-
-        if t >= self._next_pedals:
-            self._next_pedals = t + 1.0 / self.pedal_hz
-            watts, cadence = self.pedal_model.report(observed_watts, observed_cadence, self._rng)
-            self.pedals.emit(t, watts, cadence)
+    def _drain(
+        self,
+        next_due: float,
+        period: float,
+        t: float,
+        source: PowerSource,
+        model: MeterModel,
+        max_per_tick: int = 200,
+    ) -> float:
+        emitted = 0
+        while next_due <= t and emitted < max_per_tick:
+            watts = max(0.0, self._true_watts + self._rng.gauss(0.0, self.rider.power_noise_w))
+            cadence = max(0.0, self._cadence + self._rng.gauss(0.0, self.rider.cadence_noise_rpm))
+            reported_w, reported_rpm = model.report(watts, cadence, self._rng)
+            source.emit(next_due, reported_w, reported_rpm)
+            next_due += period
+            emitted += 1
+        return next_due if emitted < max_per_tick else t + period
 
     def attach(self, clock: VirtualClock) -> None:
         clock.add_tick_handler(self.tick)

@@ -155,6 +155,8 @@ class CompareServer:
         self._sockets: set[web.WebSocketResponse] = set()
         self._push_task: asyncio.Task | None = None
         self._trace: list[dict] = []
+        self._last_trace_t = -1.0
+        self._rig: SimulatedRig | None = None
 
     # ---------- device lifecycle ----------
 
@@ -231,16 +233,22 @@ class CompareServer:
 
         self.warnings.clear()
         self._trace.clear()
+        self._last_trace_t = -1.0
         self.report = None
         self.report_text = ""
         self.error = None
 
-        # Restart the clock so session time begins at zero for this run.
-        self._clock = ScaledClock(self._clock.speed)
-        for source in (self._trainer, self._pedals):
-            setattr(source, "_clock", self._clock)
+        # Restart the clock so session time begins at zero for this run. The
+        # simulated rig has to be rewound with it, or its next-sample times stay
+        # parked wherever the connection preview left them and it emits nothing.
         if self._driver is not None:
             await self._driver.stop()
+        self._clock = ScaledClock(self._clock.speed)
+        for source in (self._trainer, self._pedals):
+            source.set_clock(self._clock)
+        self._last_trace_t = -1.0
+        if self._rig is not None:
+            self._rig.reset()
             self._driver = SimulationDriver(self._rig, self._clock)
             await self._driver.start()
 
@@ -290,6 +298,11 @@ class CompareServer:
             self.status = None
 
     def _append_trace(self, status: LiveStatus) -> None:
+        # One point per second of session time keeps the chart payload bounded
+        # regardless of how fast simulated time is running.
+        if status.t - self._last_trace_t < 1.0:
+            return
+        self._last_trace_t = status.t
         trainer = self.monitors[TRAINER].last
         pedals = self.monitors[PEDALS].last
         self._trace.append(

@@ -58,10 +58,15 @@ class SimulationDriver:
     advances time on its own, so a background task has to.
     """
 
-    def __init__(self, rig: SimulatedRig, clock: Clock, hz: float = 8.0) -> None:
+    def __init__(
+        self, rig: SimulatedRig, clock: Clock, hz: float = 8.0, min_interval_s: float = 0.005
+    ) -> None:
         self.rig = rig
         self.clock = clock
         self.hz = hz
+        # Accelerated time would otherwise ask for sub-millisecond wakeups and
+        # starve the event loop; the rig backfills whatever a coarser tick skips.
+        self.min_interval_s = min_interval_s
         self._task: asyncio.Task | None = None
 
     async def start(self) -> None:
@@ -69,10 +74,12 @@ class SimulationDriver:
             self._task = asyncio.create_task(self._loop())
 
     async def _loop(self) -> None:
+        speed = getattr(self.clock, "speed", 1.0)
+        interval = max(1.0 / self.hz / speed, self.min_interval_s)
         try:
             while True:
                 self.rig.tick(self.clock.now())
-                await self.clock.sleep(1.0 / self.hz)
+                await asyncio.sleep(interval)
         except asyncio.CancelledError:
             pass
 
