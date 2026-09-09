@@ -355,6 +355,45 @@ def _notes(report: ComparisonReport, thresholds: Thresholds) -> list[str]:
     return notes
 
 
+def comparison_to_dict(report: ComparisonReport) -> dict:
+    return {
+        "mean_ratio": report.mean_ratio,
+        "ratio_spread": report.ratio_spread,
+        "slope": report.slope,
+        "intercept": report.intercept,
+        "r_squared": report.r_squared,
+        "consistency": report.consistency.value,
+        "offset": report.offset.value,
+        "ratio_by_cadence": {str(k): v for k, v in report.ratio_by_cadence.items()},
+        "cadence_bias_rpm": report.cadence_bias_rpm,
+        "drift": [{"condition": label, "delta": delta} for label, delta in report.drift],
+        "yields": report.yields,
+        "notes": report.notes,
+        "cells": [
+            {
+                "segment_index": cell.segment_index,
+                "label": cell.label,
+                "target_watts": cell.target_watts,
+                "target_rpm": cell.target_rpm,
+                "trainer_mean_w": cell.trainer_mean_w,
+                "pedal_mean_w": cell.pedal_mean_w,
+                "trainer_cadence_rpm": cell.trainer_cadence_rpm,
+                "pedal_cadence_rpm": cell.pedal_cadence_rpm,
+                "trainer_n": cell.trainer_n,
+                "pedal_n": cell.pedal_n,
+                "time_in_zone": cell.time_in_zone,
+                "ratio": cell.ratio,
+                "ratio_stderr": cell.ratio_stderr,
+                "diff_pct": cell.diff_pct,
+                "usable": cell.usable,
+                "verdict": cell.verdict.value,
+                "reason": cell.reason,
+            }
+            for cell in report.cells
+        ],
+    }
+
+
 def format_comparison_report(report: ComparisonReport) -> str:
     lines: list[str] = []
     lines.append("Dual power source comparison")

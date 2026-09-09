@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -85,25 +86,28 @@ class SessionLog:
     def load_json(cls, path: Path) -> "SessionLog":
         return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
-    def save_csv(self, path: Path) -> None:
+    def csv_text(self) -> str:
         """Wide CSV for spreadsheet use: one row per sample instant per source."""
-        with path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(["t_s", "source", "watts", "cadence_rpm", "segment", "target_watts", "target_rpm"])
-            by_time = sorted(self.samples, key=lambda s: (s.t, s.source))
-            for sample in by_time:
-                seg = self.segment_at(sample.t)
-                writer.writerow(
-                    [
-                        f"{sample.t:.3f}",
-                        sample.source,
-                        "" if sample.watts is None else f"{sample.watts:.1f}",
-                        "" if sample.cadence is None else f"{sample.cadence:.1f}",
-                        seg.cell_label if seg else "",
-                        seg.target_watts if seg else "",
-                        seg.target_rpm if seg and seg.target_rpm is not None else "",
-                    ]
-                )
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["t_s", "source", "watts", "cadence_rpm", "segment", "target_watts", "target_rpm"])
+        for sample in sorted(self.samples, key=lambda s: (s.t, s.source)):
+            seg = self.segment_at(sample.t)
+            writer.writerow(
+                [
+                    f"{sample.t:.3f}",
+                    sample.source,
+                    "" if sample.watts is None else f"{sample.watts:.1f}",
+                    "" if sample.cadence is None else f"{sample.cadence:.1f}",
+                    seg.cell_label if seg else "",
+                    seg.target_watts if seg else "",
+                    seg.target_rpm if seg and seg.target_rpm is not None else "",
+                ]
+            )
+        return buffer.getvalue()
+
+    def save_csv(self, path: Path) -> None:
+        path.write_text(self.csv_text(), encoding="utf-8")
 
     def segment_at(self, t: float) -> TimelineSegment | None:
         for seg in self.timeline:

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Power meter comparison</title>
+<link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>Power meter comparison</h1>
+    <div class="header-right">
+      <span id="speed-pill" class="pill hidden"></span>
+      <span id="phase-pill" class="pill">disconnected</span>
+    </div>
+  </div>
+</header>
+
+<nav>
+  <div class="wrap">
+    <button class="tab active" data-tab="devices">1 &middot; Devices</button>
+    <button class="tab" data-tab="protocol">2 &middot; Protocol</button>
+    <button class="tab" data-tab="run">3 &middot; Run</button>
+  </div>
+</nav>
+
+<main class="wrap">
+  <div id="banner" class="banner hidden"></div>
+
+  <!-- ---------------- Devices ---------------- -->
+  <section id="tab-devices" class="tab-panel">
+    <div class="card">
+      <h2>Source</h2>
+      <div class="modes">
+        <label class="radio"><input type="radio" name="mode" value="simulate" checked/> Simulated rig</label>
+        <label class="radio"><input type="radio" name="mode" value="hardware"/> Real hardware</label>
+      </div>
+
+      <div id="panel-simulate" class="panel">
+        <p class="hint">
+          A synthetic trainer and pedals with an injectable fault, so the whole flow can be
+          rehearsed without a bike. Accelerate time to watch a full protocol in seconds.
+        </p>
+        <div class="grid-4">
+          <label>Pedal scale error<input id="sim-scale" type="number" step="0.01" value="1.00"/></label>
+          <label>Torque gain (per N&middot;m)<input id="sim-torque" type="number" step="0.001" value="0.000"/></label>
+          <label>Left leg fraction<input id="sim-left" type="number" step="0.01" value="0.50"/></label>
+          <label>Time speed &times;<input id="sim-speed" type="number" step="1" min="1" value="60"/></label>
+        </div>
+      </div>
+
+      <div id="panel-hardware" class="panel hidden">
+        <p class="hint">
+          The trainer is driven over Bluetooth FTMS. Pedals are read over ANT+ so your head unit can
+          keep recording the same ride. Close Zwift first &mdash; BLE trainer control is exclusive.
+        </p>
+        <div class="grid-3">
+          <label>Trainer BLE address
+            <input id="trainer-address" type="text" placeholder="AA:BB:CC:DD:EE:FF"/>
+          </label>
+          <label>ANT+ pedal id <span class="sub">0 = first found</span>
+            <input id="ant-id" type="number" value="0"/>
+          </label>
+          <label>Pedals over BLE instead <span class="sub">optional fallback</span>
+            <input id="pedals-ble" type="text" placeholder="leave blank to use ANT+"/>
+          </label>
+        </div>
+        <div class="row">
+          <button id="btn-scan" class="secondary">Scan for BLE devices</button>
+          <span id="scan-status" class="sub"></span>
+        </div>
+        <ul id="scan-results" class="scan-list"></ul>
+      </div>
+
+      <div class="row">
+        <button id="btn-connect" class="primary">Connect</button>
+        <button id="btn-disconnect" class="secondary" disabled>Disconnect</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Verify</h2>
+      <p class="hint">Turn the cranks. Both cards should show live watts and a steady sample rate before you start.</p>
+      <div class="source-cards">
+        <div class="source-card" id="src-trainer">
+          <div class="source-head"><span class="dot"></span><b>Trainer</b><span class="rate"></span></div>
+          <div class="big"><span class="watts">&mdash;</span><span class="unit">W</span></div>
+          <div class="sub"><span class="cadence">&mdash;</span> rpm</div>
+        </div>
+        <div class="source-card" id="src-pedals">
+          <div class="source-head"><span class="dot"></span><b>Pedals</b><span class="rate"></span></div>
+          <div class="big"><span class="watts">&mdash;</span><span class="unit">W</span></div>
+          <div class="sub"><span class="cadence">&mdash;</span> rpm</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------------- Protocol ---------------- -->
+  <section id="tab-protocol" class="tab-panel hidden">
+    <div class="card">
+      <h2>Protocol</h2>
+      <p class="hint">
+        Every power step is ridden at two cadences. At a fixed power, 70 rpm loads the cranks about
+        29% harder than 90 rpm, so each step gives two crank torques &mdash; that is what separates a
+        torque-dependent error from a power-dependent one.
+      </p>
+      <div class="row">
+        <button class="secondary preset" data-preset="standard">Standard preset</button>
+        <button class="secondary preset" data-preset="quick">Quick preset</button>
+      </div>
+      <div class="grid-4">
+        <label>Warm-up (min)<input id="p-warmup" type="number" step="1" min="0" value="10"/></label>
+        <label>Seconds per cadence<input id="p-seconds" type="number" step="10" min="30" value="120"/></label>
+        <label>Cadences (rpm)<input id="p-cadences" type="text" value="70, 90"/></label>
+        <label>Cadence tolerance (&plusmn;rpm)<input id="p-tolerance" type="number" step="1" min="1" value="5"/></label>
+      </div>
+
+      <table class="steps">
+        <thead><tr><th>#</th><th>Target watts</th><th>Label</th><th></th></tr></thead>
+        <tbody id="steps-body"></tbody>
+      </table>
+      <div class="row">
+        <button id="btn-add-step" class="secondary">Add step</button>
+        <button id="btn-apply" class="primary">Apply protocol</button>
+        <span id="protocol-summary" class="sub"></span>
+      </div>
+      <ul id="protocol-notes" class="notes"></ul>
+    </div>
+  </section>
+
+  <!-- ---------------- Run ---------------- -->
+  <section id="tab-run" class="tab-panel hidden">
+    <div class="card">
+      <div class="row space">
+        <div>
+          <h2 id="segment-label">Not started</h2>
+          <div class="sub" id="segment-sub">Connect the devices, then start the protocol.</div>
+        </div>
+        <div class="row">
+          <button id="btn-start" class="primary" disabled>Start</button>
+          <button id="btn-stop" class="secondary" disabled>Stop</button>
+        </div>
+      </div>
+      <div class="progress"><div id="progress-bar"></div></div>
+    </div>
+
+    <div class="card" id="cadence-card">
+      <h2>Cadence guide</h2>
+      <div class="cadence-wrap">
+        <div class="cadence-now">
+          <span id="cadence-value">&mdash;</span><span class="unit">rpm</span>
+          <div class="sub">target <b id="cadence-target">&mdash;</b></div>
+        </div>
+        <div class="cadence-meter">
+          <div class="meter-track">
+            <div id="meter-band" class="meter-band"></div>
+            <div id="meter-marker" class="meter-marker"></div>
+          </div>
+          <div class="meter-labels"><span id="meter-lo"></span><span id="meter-hi"></span></div>
+          <div id="cadence-cue" class="cue">&mdash;</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="live-cards">
+        <div class="live-card"><span class="sub">Trainer</span><b id="live-trainer">&mdash;</b><span class="unit">W</span></div>
+        <div class="live-card"><span class="sub">Pedals</span><b id="live-pedals">&mdash;</b><span class="unit">W</span></div>
+        <div class="live-card"><span class="sub">Live ratio</span><b id="live-ratio">&mdash;</b></div>
+      </div>
+      <canvas id="trace" height="240"></canvas>
+      <div class="legend">
+        <span><i class="swatch trainer"></i>Trainer</span>
+        <span><i class="swatch pedals"></i>Pedals</span>
+        <span><i class="swatch target"></i>ERG target</span>
+      </div>
+    </div>
+
+    <div class="card hidden" id="results-card">
+      <h2>Result</h2>
+      <div class="verdicts">
+        <div class="verdict" id="verdict-consistency">
+          <span class="sub">Consistency</span><b>&mdash;</b>
+          <span class="sub">spread across the grid</span>
+        </div>
+        <div class="verdict" id="verdict-offset">
+          <span class="sub">Offset</span><b>&mdash;</b>
+          <span class="sub">mean ratio vs expected band</span>
+        </div>
+        <div class="verdict plain" id="verdict-fit">
+          <span class="sub">Fit</span><b>&mdash;</b>
+          <span class="sub">pedals against trainer</span>
+        </div>
+      </div>
+      <p class="hint">
+        Consistency is the verdict that needs no assumptions. A left-only pedal read against a
+        direct-drive trainer should sit a few percent high from drivetrain loss and imbalance, and
+        neither of those varies with power or cadence &mdash; so a flat ratio means the two are
+        aligned whatever its value, while a ratio that drifts across the grid points at a real fault.
+      </p>
+      <table class="results">
+        <thead>
+          <tr><th>Cell</th><th>Trainer</th><th>Pedals</th><th>Ratio</th><th>Diff</th><th>In zone</th><th>Samples</th></tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+      </table>
+      <ul id="result-notes" class="notes"></ul>
+      <div class="row">
+        <a class="secondary button" href="/api/session.json" download>Download session JSON</a>
+        <a class="secondary button" href="/api/session.csv" download>Download CSV</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

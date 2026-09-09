@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Callable
 
 from power_meter_audit.live.protocol import Protocol
@@ -48,3 +49,38 @@ async def run_simulated_session(
         extra_segment_hook=rig.set_target_cadence,
     )
     return await runner.run()
+
+
+class SimulationDriver:
+    """Ticks a simulated rig against a wall-clock (or accelerated) clock.
+
+    The virtual clock drives the rig itself, but under a real clock nothing
+    advances time on its own, so a background task has to.
+    """
+
+    def __init__(self, rig: SimulatedRig, clock: Clock, hz: float = 8.0) -> None:
+        self.rig = rig
+        self.clock = clock
+        self.hz = hz
+        self._task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        if self._task is None:
+            self._task = asyncio.create_task(self._loop())
+
+    async def _loop(self) -> None:
+        try:
+            while True:
+                self.rig.tick(self.clock.now())
+                await self.clock.sleep(1.0 / self.hz)
+        except asyncio.CancelledError:
+            pass
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None

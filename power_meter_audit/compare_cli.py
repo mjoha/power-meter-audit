@@ -49,6 +49,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument("--out", type=Path, metavar="PREFIX", help="Write <PREFIX>.json and <PREFIX>.csv")
     p.add_argument("--analyse", type=Path, metavar="FILE", help="Re-analyse a saved session and exit")
+
+    p.add_argument("--ui", action="store_true", help="Open the browser UI instead of running here")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8737)
+    p.add_argument("--no-browser", action="store_true", help="Do not open a browser window")
     return p
 
 
@@ -148,6 +153,14 @@ async def _run_simulated(args: argparse.Namespace, protocol: Protocol) -> Sessio
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    if args.ui:
+        try:
+            from power_meter_audit.live.webui.server import serve
+        except ImportError as exc:
+            raise SystemExit(f"error: the UI needs aiohttp — pip install -e .[ui] ({exc})")
+        serve(host=args.host, port=args.port, open_browser=not args.no_browser)
+        return 0
+
     if args.scan:
         from power_meter_audit.live.devices import scan
 
@@ -177,6 +190,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Wrote {args.out.with_suffix('.json')} and {args.out.with_suffix('.csv')}")
 
     return 0 if report.consistency.value == "green" else 1
+
+
+def ui_main(argv: list[str] | None = None) -> int:
+    """Entry point for `power-meter-ui`."""
+    return main(["--ui", *(argv or [])])
 
 
 if __name__ == "__main__":

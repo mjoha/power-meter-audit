@@ -39,15 +39,27 @@ class Clock(abc.ABC):
         ...
 
 
-class RealClock(Clock):
-    def __init__(self) -> None:
+class ScaledClock(Clock):
+    """Wall clock, optionally accelerated.
+
+    A speed above 1 lets a 45-minute protocol be exercised end to end in
+    seconds, which is the only practical way to test the UI without a bike.
+    """
+
+    def __init__(self, speed: float = 1.0) -> None:
+        self.speed = max(float(speed), 1e-6)
         self._t0 = time.monotonic()
 
     def now(self) -> float:
-        return time.monotonic() - self._t0
+        return (time.monotonic() - self._t0) * self.speed
 
     async def sleep(self, seconds: float) -> None:
-        await asyncio.sleep(seconds)
+        await asyncio.sleep(seconds / self.speed)
+
+
+class RealClock(ScaledClock):
+    def __init__(self) -> None:
+        super().__init__(1.0)
 
 
 class VirtualClock(Clock):
