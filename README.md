@@ -124,8 +124,15 @@ not attribute it.
 ## Hardware
 
 ```powershell
+.\.venv\Scripts\activate   # the venv matters here, see below
 pip install -e .[app]      # or .[hardware] / .[ui] separately
 ```
+
+Install into the virtual environment, not a system-wide Python. `fitparse` ships no wheel, so pip
+falls back to a legacy `setup.py install` that writes a `fitdump` script next to the interpreter;
+against a system Python such as `C:\Python310` that needs admin rights and fails with
+`could not create '...\Scripts\fitdump': Permission denied`, taking the whole install down with it.
+A venv you own has no such problem.
 
 The trainer is driven over Bluetooth FTMS. The pedals are read over ANT+ by default, which supports
 unlimited concurrent listeners so your head unit can keep recording the same ride; that needs an

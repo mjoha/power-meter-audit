@@ -107,13 +107,20 @@ $("btn-scan").onclick = async () => {
     list.innerHTML = "";
     (result.devices || []).forEach((device) => {
       const item = document.createElement("li");
-      item.textContent = `${device.name} — ${device.address}`;
-      item.onclick = () => { $("trainer-address").value = device.address; };
+      const tags = [];
+      if (device.trainer) tags.push('<i class="tag trainer">trainer</i>');
+      if (device.power) tags.push('<i class="tag power">power</i>');
+      item.innerHTML =
+        `<b>${device.name}</b> ${tags.join(" ")}<span class="sub"> ${device.address}` +
+        `${device.rssi == null ? "" : ` · ${device.rssi} dBm`}</span>`;
+      item.onclick = () => {
+        $(device.power && !device.trainer ? "pedals-ble" : "trainer-address").value = device.address;
+      };
       list.appendChild(item);
     });
     $("scan-status").textContent = result.error
       ? result.error
-      : `${(result.devices || []).length} device(s) found — click one to use as the trainer`;
+      : `${(result.devices || []).length} device(s) — click the one marked "trainer"`;
   } catch (error) {
     $("scan-status").textContent = error.message;
   } finally {

@@ -20,6 +20,51 @@ FTMS_SERVICE_UUID = "00001826-0000-1000-8000-00805f9b34fb"
 CYCLING_POWER_SERVICE_UUID = "00001818-0000-1000-8000-00805f9b34fb"
 
 
+class CrankCadenceTracker:
+    """Derives cadence from Cycling Power Service crank revolution counters.
+
+    The BLE Cycling Power Measurement carries no cadence field. It reports a
+    cumulative crank count and the time of the last crank event in 1/1024 s,
+    both 16-bit and both free to wrap, and cadence is the ratio of their deltas.
+    """
+
+    ROLLOVER = 1 << 16
+    TIME_UNIT_S = 1.0 / 1024.0
+    MAX_PLAUSIBLE_RPM = 250.0
+
+    def __init__(self, coast_timeout_s: float = 3.0) -> None:
+        self.coast_timeout_s = coast_timeout_s
+        self._last_revs: int | None = None
+        self._last_event: int | None = None
+        self._last_change_t: float | None = None
+        self._cadence: float | None = None
+
+    def update(self, revs: int | None, event_time: int | None, now: float) -> float | None:
+        if revs is None or event_time is None:
+            return None
+
+        if self._last_revs is None or self._last_event is None:
+            self._last_revs, self._last_event, self._last_change_t = revs, event_time, now
+            return None
+
+        d_revs = (revs - self._last_revs) % self.ROLLOVER
+        d_ticks = (event_time - self._last_event) % self.ROLLOVER
+
+        if d_ticks == 0:
+            # No crank event since the last notification. That is normal between
+            # updates at low cadence, but a long silence means coasting.
+            if self._last_change_t is not None and now - self._last_change_t >= self.coast_timeout_s:
+                self._cadence = 0.0
+            return self._cadence
+
+        self._last_revs, self._last_event, self._last_change_t = revs, event_time, now
+        cadence = d_revs / (d_ticks * self.TIME_UNIT_S) * 60.0
+        if cadence > self.MAX_PLAUSIBLE_RPM:
+            return self._cadence
+        self._cadence = cadence
+        return cadence
+
+
 def _first_attr(obj: Any, names: tuple[str, ...]) -> Any:
     for name in names:
         value = getattr(obj, name, None)
@@ -59,7 +104,18 @@ class FtmsTrainer(TrainerSource):
         # control must be requested before any target command, or writes fail.
         await self._ftms.enable_control_point_indicate()
         await self._ftms.request_control()
-        await self._ftms.reset()
+
+        # Clearing whatever Zwift left behind is only a nicety, so a machine
+        # that refuses Reset should still be usable. Reset also returns the
+        # machine to its default state, which on some firmwares drops the
+        # control permission just granted, so take it again afterwards.
+        try:
+            await self._ftms.reset()
+        except Exception:  # noqa: BLE001 - optional tidy-up
+            pass
+        else:
+            await self._ftms.request_control()
+
         self.connected = True
 
     def _on_indoor_bike_data(self, data: Any) -> None:
@@ -167,11 +223,14 @@ class BlePedals(PowerSource):
     dongle is available.
     """
 
+    POWER_FIELDS = ("instantaneous_power", "instant_power", "power")
+
     def __init__(self, address: str, clock: Clock, label: str = "Pedals") -> None:
         super().__init__(PEDALS, label)
         self.address = address
         self._clock = clock
         self._client = None
+        self._cadence = CrankCadenceTracker()
 
     async def connect(self) -> None:
         from bleak import BleakClient
@@ -185,13 +244,14 @@ class BlePedals(PowerSource):
         self.connected = True
 
     def _on_measurement(self, data: Any) -> None:
-        watts = _first_attr(data, ("instantaneous_power", "instant_power", "power"))
-        cadence = _first_attr(data, ("cadence", "instantaneous_cadence"))
-        self.emit(
-            self._clock.now(),
-            float(watts) if watts is not None else None,
-            float(cadence) if cadence is not None else None,
+        watts = _first_attr(data, self.POWER_FIELDS)
+        now = self._clock.now()
+        cadence = self._cadence.update(
+            _first_attr(data, ("cumulative_crank_revs",)),
+            _first_attr(data, ("last_crank_event_time",)),
+            now,
         )
+        self.emit(now, float(watts) if watts is not None else None, cadence)
 
     async def disconnect(self) -> None:
         if self._client is not None:
@@ -199,14 +259,32 @@ class BlePedals(PowerSource):
         self.connected = False
 
 
-async def scan(timeout: float = 8.0) -> list[tuple[str, str]]:
-    """Discover BLE devices advertising power or fitness-machine services."""
+async def scan(timeout: float = 8.0) -> list[dict[str, Any]]:
+    """Discover nearby BLE devices, flagging those advertising power or FTMS.
+
+    Everything named is returned rather than only recognised devices. Some
+    trainers advertise no service UUIDs until you connect, and filtering those
+    out leaves the one device you need invisible and unselectable.
+    """
     from bleak import BleakScanner
 
     found = await BleakScanner.discover(timeout=timeout, return_adv=True)
-    results: list[tuple[str, str]] = []
+    results: list[dict[str, Any]] = []
     for device, adv in found.values():
         uuids = {u.lower() for u in (adv.service_uuids or [])}
-        if FTMS_SERVICE_UUID in uuids or CYCLING_POWER_SERVICE_UUID in uuids:
-            results.append((device.address, device.name or "unknown"))
+        is_trainer = FTMS_SERVICE_UUID in uuids
+        is_power = CYCLING_POWER_SERVICE_UUID in uuids
+        name = device.name or getattr(adv, "local_name", None)
+        if not (name or is_trainer or is_power):
+            continue
+        results.append(
+            {
+                "address": device.address,
+                "name": name or "unknown",
+                "trainer": is_trainer,
+                "power": is_power,
+                "rssi": getattr(adv, "rssi", None),
+            }
+        )
+    results.sort(key=lambda d: (not d["trainer"], not d["power"], -(d["rssi"] or -999)))
     return results

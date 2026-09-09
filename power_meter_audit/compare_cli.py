@@ -164,8 +164,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.scan:
         from power_meter_audit.live.devices import scan
 
-        for address, name in asyncio.run(scan()):
-            print(f"{address}  {name}")
+        try:
+            devices = asyncio.run(scan())
+        except Exception as exc:  # noqa: BLE001 - a stack trace helps nobody here
+            raise SystemExit(f"error: BLE scan failed ({exc}). Is Bluetooth switched on?")
+        if not devices:
+            print("No BLE devices found. Wake the trainer by turning the cranks and retry.")
+        for device in devices:
+            tags = " ".join(
+                tag for tag, on in (("trainer", device["trainer"]), ("power", device["power"])) if on
+            )
+            print(f"{device['address']}  {device['name']:<24} {tags}")
         return 0
 
     if args.analyse:

@@ -410,9 +410,7 @@ def create_app(server: CompareServer | None = None) -> web.Application:
             devices = await scan()
         except Exception as exc:  # noqa: BLE001 - reported in the UI
             return web.json_response({"error": str(exc), "devices": []}, status=200)
-        return web.json_response(
-            {"devices": [{"address": address, "name": name} for address, name in devices]}
-        )
+        return web.json_response({"devices": devices})
 
     async def post_connect(request: web.Request) -> web.Response:
         payload = await request.json()

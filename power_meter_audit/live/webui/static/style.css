@@ -91,6 +91,12 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   margin-bottom: 0.35rem; cursor: pointer; font-size: 0.88rem; background: #fff;
 }
 .scan-list li:hover { border-color: var(--ink); }
+.tag {
+  font-style: normal; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
+  border: 1px solid currentColor; border-radius: 999px; padding: 0 0.4rem; margin-left: 0.3rem;
+}
+.tag.trainer { color: var(--trainer); }
+.tag.power { color: var(--pedals); }
 
 .source-cards, .live-cards { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 .source-card { border: 1px solid var(--line); border-radius: 10px; padding: 0.8rem 0.9rem; background: #fff; }
